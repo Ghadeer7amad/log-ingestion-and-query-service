@@ -1,14 +1,12 @@
 import express from "express";
 import { config } from "./config.js";
 import { runMigrations } from "./db/migrate.js";
-import { healthHandler } from "./handlers/health.js";
+import { healthHandler, setAppReady } from "./handlers/health.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { logNonOkResponses } from "./middlewares/logger.js";
 
 const app = express();
 const PORT = config.api?.port || 8080;
-
-
 
 app.use(express.json({ limit: "10mb" }));
 app.use(logNonOkResponses);
@@ -21,6 +19,7 @@ async function startServer(): Promise<void> {
   try {
     console.log("Running database migrations...");
     await runMigrations();
+    setAppReady(true);
     console.log("Database migrations applied successfully.");
 
     app.listen(PORT, () => {

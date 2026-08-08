@@ -2,6 +2,7 @@ import express from "express";
 import { config } from "./config.js";
 import { runMigrations } from "./db/migrate.js";
 import { healthHandler, setAppReady } from "./handlers/health.js";
+import { ingestLogsHandler } from "./handlers/ingest.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { logNonOkResponses } from "./middlewares/logger.js";
 
@@ -12,6 +13,8 @@ app.use(express.json({ limit: "10mb" }));
 app.use(logNonOkResponses);
 
 app.get("/health", healthHandler);
+app.post("/logs", ingestLogsHandler);
+
 
 app.use(errorHandler);
 

@@ -1,5 +1,5 @@
 {
-  "id": "1b05e475-c1ab-4982-b8fb-87e2bf418270",
+  "id": "2fe7cbfb-17b3-4338-91ec-2dafab304c70",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -10,10 +10,9 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "bigserial",
           "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
+          "notNull": true
         },
         "timestamp": {
           "name": "timestamp",
@@ -48,41 +47,23 @@
         }
       },
       "indexes": {
-        "idx_logs_timestamp": {
-          "name": "idx_logs_timestamp",
+        "idx_logs_time_service_level": {
+          "name": "idx_logs_time_service_level",
           "columns": [
             {
               "expression": "timestamp",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_logs_level": {
-          "name": "idx_logs_level",
-          "columns": [
+            },
             {
-              "expression": "level",
+              "expression": "service",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_logs_service": {
-          "name": "idx_logs_service",
-          "columns": [
+            },
             {
-              "expression": "service",
+              "expression": "level",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

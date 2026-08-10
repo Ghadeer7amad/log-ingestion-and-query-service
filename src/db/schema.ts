@@ -11,8 +11,12 @@ export const logs = pgTable('logs', {
     .default({})
     .notNull(),
 }, (table) => [
-  index('idx_logs_time_service_level').on(table.timestamp, table.service, table.level),
-  index('idx_logs_attributes_gin').using('gin', table.attributes),
+  index('idx_logs_timestamp').on(table.timestamp),
+    index('idx_logs_service_level_timestamp').on(table.service, table.level, table.timestamp),
+    index('idx_logs_service_timestamp').on(table.service, table.timestamp),
+  index('idx_logs_level_timestamp').on(table.level, table.timestamp),
+  
+    index('idx_logs_attributes_gin').using('gin', table.attributes),
 ]);
 
 export type Log = typeof logs.$inferSelect;

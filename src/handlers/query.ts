@@ -2,46 +2,38 @@ import { Request, Response } from 'express';
 import { db } from '../db';
 import { logs } from '../db/schema';
 import { eq, and, gte, lt, ilike, desc, sql } from 'drizzle-orm';
+import { validateGetLogsQuery } from '../validators/query';
 
 export async function getLogsHandler(req: Request, res: Response) {
   try {
-    const { service, level, since, until, q, limit: rawLimit, cursor } = req.query;
+    const validatedData = validateGetLogsQuery(req, res);
+    if (!validatedData) {
+      return;
+    }
 
-    const limit = rawLimit ? parseInt(rawLimit as string, 10) : 100;
+    const { service, level, sinceDate, untilDate, q, limit, parsedCursor, attributes } = validatedData;
+
     const conditions = [];
 
-   
-    if (service) conditions.push(eq(logs.service, service as string));
-    if (level) conditions.push(eq(logs.level, level as string));
+    if (service) conditions.push(eq(logs.service, service));
+    if (level) conditions.push(eq(logs.level, level));
 
-    
-    if (since) conditions.push(gte(logs.timestamp, new Date(since as string)));
-    if (until) conditions.push(lt(logs.timestamp, new Date(until as string)));
+    if (sinceDate) conditions.push(gte(logs.timestamp, sinceDate));
+    if (untilDate) conditions.push(lt(logs.timestamp, untilDate));
 
-    
     if (q) conditions.push(ilike(logs.message, `%${q}%`));
 
-    
-    Object.keys(req.query).forEach((key) => {
-      if (key.startsWith('attr.')) {
-        const attrKey = key.replace('attr.', '');
-        const attrValue = req.query[key] as string;
-        conditions.push(sql`${logs.attributes}->>${attrKey} = ${attrValue}`);
-      }
+    Object.entries(attributes).forEach(([attrKey, attrValue]) => {
+      conditions.push(sql`${logs.attributes}->>${attrKey} = ${attrValue}`);
     });
 
-
-    if (cursor) {
-      const decoded = Buffer.from(cursor as string, 'base64').toString('utf-8');
-      const { timestamp: cursorTime, id: cursorId } = JSON.parse(decoded);
-      const cDate = new Date(cursorTime);
-
+    if (parsedCursor) {
+      const cDate = new Date(parsedCursor.timestamp);
       conditions.push(
-        sql`(${logs.timestamp}, ${logs.id}) < (${cDate.toISOString()}::timestamp with time zone, ${Number(cursorId)})`
+        sql`(${logs.timestamp}, ${logs.id}) < (${cDate.toISOString()}::timestamp with time zone, ${Number(parsedCursor.id)})`
       );
     }
 
-  
     const queryResults = await db
       .select()
       .from(logs)
@@ -52,7 +44,6 @@ export async function getLogsHandler(req: Request, res: Response) {
     const hasNext = queryResults.length > limit;
     const items = hasNext ? queryResults.slice(0, limit) : queryResults;
 
-    
     let next_cursor: string | null = null;
     if (hasNext && items.length > 0) {
       const lastItem = items[items.length - 1];

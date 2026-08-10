@@ -4,7 +4,7 @@ import { runMigrations } from "./db/migrate.js";
 import { healthHandler, setAppReady } from "./handlers/health.js";
 import { ingestLogsHandler } from "./handlers/ingest.js";
 import { getLogsHandler } from "./handlers/query.js";
-import { validateGetLogsQuery } from "./validators/query.js";
+import { aggregateLogsHandler } from "./handlers/aggregate.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { logNonOkResponses } from "./middlewares/logger.js";
 
@@ -16,8 +16,8 @@ app.use(logNonOkResponses);
 
 app.get("/health", healthHandler);
 app.post("/logs", ingestLogsHandler);
-
-app.get("/logs", validateGetLogsQuery, getLogsHandler);
+app.get('/logs', getLogsHandler);
+app.get('/logs/aggregate', aggregateLogsHandler);
 
 
 app.use(errorHandler);

@@ -1,5 +1,5 @@
 {
-  "id": "2fe7cbfb-17b3-4338-91ec-2dafab304c70",
+  "id": "f91c9152-7dd2-4217-b872-cef14bc5765d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -47,15 +47,24 @@
         }
       },
       "indexes": {
-        "idx_logs_time_service_level": {
-          "name": "idx_logs_time_service_level",
+        "idx_logs_timestamp": {
+          "name": "idx_logs_timestamp",
           "columns": [
             {
               "expression": "timestamp",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            },
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_logs_service_level_timestamp": {
+          "name": "idx_logs_service_level_timestamp",
+          "columns": [
             {
               "expression": "service",
               "isExpression": false,
@@ -64,6 +73,54 @@
             },
             {
               "expression": "level",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_logs_service_timestamp": {
+          "name": "idx_logs_service_timestamp",
+          "columns": [
+            {
+              "expression": "service",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_logs_level_timestamp": {
+          "name": "idx_logs_level_timestamp",
+          "columns": [
+            {
+              "expression": "level",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -10,18 +10,18 @@ export async function getLogsHandler(req: Request, res: Response) {
     const limit = rawLimit ? parseInt(rawLimit as string, 10) : 100;
     const conditions = [];
 
-    // Exact matches
+   
     if (service) conditions.push(eq(logs.service, service as string));
     if (level) conditions.push(eq(logs.level, level as string));
 
-    // Time ranges (since inclusive >=, until exclusive <)
+    
     if (since) conditions.push(gte(logs.timestamp, new Date(since as string)));
     if (until) conditions.push(lt(logs.timestamp, new Date(until as string)));
 
-    // Substring search on message (case-insensitive)
+    
     if (q) conditions.push(ilike(logs.message, `%${q}%`));
 
-    // Dynamic attributes matching (attr.<key>)
+    
     Object.keys(req.query).forEach((key) => {
       if (key.startsWith('attr.')) {
         const attrKey = key.replace('attr.', '');
@@ -30,7 +30,7 @@ export async function getLogsHandler(req: Request, res: Response) {
       }
     });
 
-// Cursor Pagination Condition: (timestamp, id) < (cursorTimestamp, cursorId)
+
     if (cursor) {
       const decoded = Buffer.from(cursor as string, 'base64').toString('utf-8');
       const { timestamp: cursorTime, id: cursorId } = JSON.parse(decoded);
@@ -41,7 +41,7 @@ export async function getLogsHandler(req: Request, res: Response) {
       );
     }
 
-    // Fetch (limit + 1) to determine hasNextPage
+  
     const queryResults = await db
       .select()
       .from(logs)
@@ -52,7 +52,7 @@ export async function getLogsHandler(req: Request, res: Response) {
     const hasNext = queryResults.length > limit;
     const items = hasNext ? queryResults.slice(0, limit) : queryResults;
 
-    // Generate next_cursor
+    
     let next_cursor: string | null = null;
     if (hasNext && items.length > 0) {
       const lastItem = items[items.length - 1];

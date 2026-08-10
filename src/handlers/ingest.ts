@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { validateAndTransformLog, ValidatedLog } from '../validators/logValidator.js';
+import { validateAndTransformLog, ValidatedLog } from '../validators/ingest.js';
 import { insertValidLogsBulk } from '../db/queries/logs.js';
 import { BadRequestError } from '../middlewares/errorHandler.js';
 

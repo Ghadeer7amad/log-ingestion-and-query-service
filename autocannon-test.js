@@ -1,4 +1,4 @@
-const autocannon = require('autocannon');
+import autocannon from 'autocannon';
 
 function generateBatch() {
   const logs = [];

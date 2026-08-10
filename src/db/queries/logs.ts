@@ -1,5 +1,5 @@
 import { queryClient } from '../index.js';
-import { ValidatedLog } from '../../validators/logValidator.js';
+import { ValidatedLog } from '../../validators/ingest.js';
 
 export async function insertValidLogsBulk(validLogs: ValidatedLog[]): Promise<number> {
   if (validLogs.length === 0) return 0;

@@ -1,6 +1,9 @@
 import type { MigrationConfig } from "drizzle-orm/migrator";
+import fs from "node:fs";
 
-process.loadEnvFile();
+if (fs.existsSync(".env")) {
+  process.loadEnvFile();
+}
 
 export type APIConfig = {
   port: number;

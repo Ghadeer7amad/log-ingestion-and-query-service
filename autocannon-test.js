@@ -18,7 +18,7 @@ function generateBatch() {
 const instance = autocannon({
   url: 'http://localhost:8080/logs',
   connections: 20,
-  duration: 10, 
+  duration: 40, // لا تنسي تعدلييييييييه
   method: 'POST',
   headers: {
     'content-type': 'application/json'

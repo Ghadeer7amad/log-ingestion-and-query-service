@@ -10,6 +10,7 @@ export type APIConfig = {
 export type DBConfig = {
   url: string;
   migrationConfig: MigrationConfig;
+  retentionDays: number; 
 };
 
 export type Config = {
@@ -27,5 +28,6 @@ export const config: Config = {
     migrationConfig: {
       migrationsFolder: "./src/db/migrations",
     },
+    retentionDays: Number(process.env.RETENTION_DAYS) || 30, 
   },
 };

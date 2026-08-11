@@ -7,6 +7,8 @@ import { getLogsHandler } from "./handlers/query.js";
 import { aggregateLogsHandler } from "./handlers/aggregate.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { logNonOkResponses } from "./middlewares/logger.js";
+import { initRetentionJob } from "./db/queries/retention.js";
+
 
 const app = express();
 const PORT = config.api?.port || 8080;
@@ -28,6 +30,8 @@ async function startServer(): Promise<void> {
     await runMigrations();
     setAppReady(true);
     console.log("Database migrations applied successfully.");
+
+    initRetentionJob();
 
     app.listen(PORT, () => {
       console.log(`Log Engine server is running on port ${PORT}`);

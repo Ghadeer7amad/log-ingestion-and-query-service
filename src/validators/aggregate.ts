@@ -23,7 +23,7 @@ export function validateAggregateQuery(
   }
 
   if (level) {
-    const validLevels = ["trace", "debug", "info", "warn", "error", "fatal"];
+    const validLevels = ["debug", "info", "warn", "error"];
     if (typeof level !== "string" || !validLevels.includes(level.toLowerCase())) {
       res.status(400).json({ error: "Unsupported log level" });
       return null;

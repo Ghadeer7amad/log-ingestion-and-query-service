@@ -1,9 +1,11 @@
 import autocannon from 'autocannon';
 
+const BATCH_SIZE = 1000; 
+
 function generateBatch() {
   const logs = [];
   const now = new Date().toISOString();
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < BATCH_SIZE; i++) {
     logs.push({
       timestamp: now,
       level: i % 2 === 0 ? 'info' : 'warn',
@@ -17,8 +19,8 @@ function generateBatch() {
 
 const instance = autocannon({
   url: 'http://localhost:8080/logs',
-  connections: 20,
-  duration: 40, // لا تنسي تعدلييييييييه
+  connections: 30, 
+  duration: 30, 
   method: 'POST',
   headers: {
     'content-type': 'application/json'
@@ -28,6 +30,23 @@ const instance = autocannon({
       client.setBody(generateBatch());
     });
   }
-}, console.log);
+}, (err, result) => {
+  if (err) {
+    console.error('Test Error:', err);
+  } else {
+    const avgReqSec = result.requests.average || 0;
+    console.log('\n==============================');
+    console.log('Final Test Results:');
+    console.log(`Total Requests: ${result.requests.total}`);
+    console.log(`Average Requests / Sec: ${avgReqSec}`);
+    console.log(`Average Logs / Sec: ~${Math.round(avgReqSec * BATCH_SIZE)} logs/sec`);
+    console.log('==============================\n');
+  }
+});
+
+
+instance.on('tick', () => {
+  console.log('Current Speed -> Running test tick...');
+});
 
 autocannon.track(instance, { renderProgressBar: true });

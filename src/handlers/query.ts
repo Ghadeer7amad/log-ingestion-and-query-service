@@ -1,45 +1,24 @@
 import { Request, Response } from 'express';
-import { db } from '../db';
-import { logs } from '../db/schema';
-import { eq, and, gte, lt, ilike, desc, sql } from 'drizzle-orm';
-import { validateGetLogsQuery } from '../validators/query';
+import { validateGetLogsQuery } from '../validators/query.js';
+import { findLogs } from '../db/queries/get_logs.js';
 
 export async function getLogsHandler(req: Request, res: Response) {
   try {
     const validatedData = validateGetLogsQuery(req, res);
-    if (!validatedData) {
-      return;
-    }
+    if (!validatedData) return;
 
     const { service, level, sinceDate, untilDate, q, limit, parsedCursor, attributes } = validatedData;
 
-    const conditions = [];
-
-    if (service) conditions.push(eq(logs.service, service));
-    if (level) conditions.push(eq(logs.level, level));
-
-    if (sinceDate) conditions.push(gte(logs.timestamp, sinceDate));
-    if (untilDate) conditions.push(lt(logs.timestamp, untilDate));
-
-    if (q) conditions.push(ilike(logs.message, `%${q}%`));
-
-    Object.entries(attributes).forEach(([attrKey, attrValue]) => {
-      conditions.push(sql`${logs.attributes}->>${attrKey} = ${attrValue}`);
+    const queryResults = await findLogs({
+      service,
+      level,
+      sinceDate,
+      untilDate,
+      q,
+      attributes,
+      parsedCursor,
+      limit,
     });
-
-    if (parsedCursor) {
-      const cDate = new Date(parsedCursor.timestamp);
-      conditions.push(
-        sql`(${logs.timestamp}, ${logs.id}) < (${cDate.toISOString()}::timestamp with time zone, ${Number(parsedCursor.id)})`
-      );
-    }
-
-    const queryResults = await db
-      .select()
-      .from(logs)
-      .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(logs.timestamp), desc(logs.id))
-      .limit(limit + 1);
 
     const hasNext = queryResults.length > limit;
     const items = hasNext ? queryResults.slice(0, limit) : queryResults;
@@ -48,17 +27,27 @@ export async function getLogsHandler(req: Request, res: Response) {
     if (hasNext && items.length > 0) {
       const lastItem = items[items.length - 1];
       const payload = JSON.stringify({
-        timestamp: lastItem.timestamp.toISOString(),
+        timestamp: new Date(lastItem.timestamp).toISOString(),
         id: lastItem.id,
       });
       next_cursor = Buffer.from(payload).toString('base64');
     }
 
+    const logs = items.map((item) => ({
+      id: item.id,
+      timestamp: new Date(item.timestamp).toISOString(),
+      level: item.level,
+      service: item.service,
+      message: item.message,
+      attributes: item.attributes,
+    }));
+
     return res.status(200).json({
-      logs: items,
+      logs,
       next_cursor,
     });
   } catch (error) {
+    console.error('Error in getLogsHandler:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

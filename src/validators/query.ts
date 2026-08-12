@@ -16,13 +16,11 @@ export interface ValidatedGetLogsQuery {
 export function validateGetLogsQuery(req: Request, res: Response): ValidatedGetLogsQuery | null {
   const { service, level, limit: rawLimit, since, until, q, cursor } = req.query;
 
-  
   if (level && !VALID_LEVELS.has(level as string)) {
     res.status(400).json({ error: 'Unsupported log level' });
     return null;
   }
 
-  
   let limit = 100;
   if (rawLimit !== undefined) {
     const parsedLimit = Number(rawLimit);
@@ -37,7 +35,6 @@ export function validateGetLogsQuery(req: Request, res: Response): ValidatedGetL
     limit = parsedLimit;
   }
 
-  
   let sinceDate: Date | undefined;
   let untilDate: Date | undefined;
 
@@ -62,23 +59,30 @@ export function validateGetLogsQuery(req: Request, res: Response): ValidatedGetL
     return null;
   }
 
-  
   let parsedCursor: { timestamp: string; id: number } | undefined;
   if (cursor) {
     try {
       const decoded = Buffer.from(cursor as string, 'base64').toString('utf-8');
-      parsedCursor = JSON.parse(decoded);
-      if (!parsedCursor?.timestamp || parsedCursor?.id === undefined) {
+      const rawCursor = JSON.parse(decoded);
+
+      if (
+        !rawCursor ||
+        typeof rawCursor.timestamp !== 'string' ||
+        isNaN(Date.parse(rawCursor.timestamp)) ||
+        typeof rawCursor.id !== 'number' ||
+        !Number.isInteger(rawCursor.id)
+      ) {
         res.status(400).json({ error: 'Malformed cursor structure' });
         return null;
       }
+
+      parsedCursor = { timestamp: rawCursor.timestamp, id: rawCursor.id };
     } catch {
       res.status(400).json({ error: 'Invalid or malformed cursor' });
       return null;
     }
   }
 
-  
   const attributes: Record<string, string> = {};
   Object.keys(req.query).forEach((key) => {
     if (key.startsWith('attr.')) {

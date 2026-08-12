@@ -1,8 +1,18 @@
-version: '3.8'
 
 services:
   postgres:
     image: postgres:15-alpine
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=768MB
+      -c maintenance_work_mem=64MB
+      -c work_mem=8MB
+      -c max_wal_size=2GB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c synchronous_commit=off
+      -c max_connections=30
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

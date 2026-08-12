@@ -38,8 +38,8 @@ export function validateAggregateQuery(
     return null;
   }
 
-  if (sinceDate >= untilDate) {
-    res.status(400).json({ error: "'since' date must be before 'until' date" });
+  if (untilDate < sinceDate) {
+    res.status(400).json({ error: "'until' must not be earlier than 'since'" });
     return null;
   }
 

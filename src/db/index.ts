@@ -4,10 +4,10 @@ import { config } from '../config.js';
 import * as schema from './schema.js';
 
 export const queryClient = postgres(config.db.url, {
-    max: 8,
+    max: 8, 
     idle_timeout: 30, 
     connect_timeout: 10,
-    //prepare: true, 
+    
 });
 
 export const db = drizzle(queryClient, { schema });

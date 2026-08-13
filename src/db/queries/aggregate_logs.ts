@@ -42,9 +42,7 @@ export async function fetchAggregateLogsFromDb(params: AggregateParams) {
 
   if (attributes) {
     for (const [key, value] of Object.entries(attributes)) {
-      conditions.push(
-        sql`${logs.attributesSearch} @> ${JSON.stringify({ [key]: value })}::jsonb`
-      );
+      conditions.push(sql`${logs.attributes} @> ${JSON.stringify({ [key]: value })}::jsonb`);
     }
   }
 

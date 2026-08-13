@@ -4,10 +4,9 @@ import { ValidatedLog } from '../../validators/ingest.js';
 export async function insertValidLogsBulk(validLogs: ValidatedLog[]): Promise<number> {
   if (validLogs.length === 0) return 0;
 
-  const CHUNK_SIZE = 1000; 
+  const CHUNK_SIZE = 1000;
   let totalInserted = 0;
 
-  
   for (let i = 0; i < validLogs.length; i += CHUNK_SIZE) {
     const chunk = validLogs.slice(i, i + CHUNK_SIZE);
     const len = chunk.length;

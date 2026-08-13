@@ -34,7 +34,6 @@ export const ingestLogsHandler = async (req: Request, res: Response, next: NextF
       return;
     }
 
-
     const acceptedCount = await insertValidLogsBulk(validLogs);
 
     res.status(200).json({

@@ -22,7 +22,7 @@ export async function findLogs(params: GetLogsQueryParams) {
   if (untilDate) conditions.push(queryClient`timestamp < ${untilDate.toISOString()}::timestamptz`);
   if (q) conditions.push(queryClient`message ILIKE ${'%' + q + '%'}`);
   if (Object.keys(attributes).length > 0) {
-    conditions.push(queryClient`attributes_search @> ${JSON.stringify(attributes)}::jsonb`);
+    conditions.push(queryClient`attributes @> ${JSON.stringify(attributes)}::jsonb`);
   }
   if (parsedCursor) {
     const cursorDate = new Date(parsedCursor.timestamp).toISOString();

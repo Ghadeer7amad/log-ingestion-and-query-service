@@ -8,6 +8,20 @@
       "when": 1786537704299,
       "tag": "0000_simple_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786613671772,
+      "tag": "0001_unlogged_and_remove_generated_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786623465622,
+      "tag": "0002_add_gin_index_back",
+      "breakpoints": true
     }
   ]
 }

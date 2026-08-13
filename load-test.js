@@ -3,13 +3,13 @@ import { check } from 'k6';
 
 export const options = {
   scenarios: {
-    ingestion: {
+    load_test: {
       executor: 'constant-arrival-rate',
-      rate: 21,
+      rate: 300,
       timeUnit: '1s',
-      duration: '20s',
-      preAllocatedVUs: 40,
-      maxVUs: 120,
+      duration: '120s',
+      preAllocatedVUs: 500,
+      maxVUs: 1000,
     },
   },
 };
@@ -21,16 +21,13 @@ function randomLog() {
     timestamp: new Date().toISOString(),
     level: levels[Math.floor(Math.random() * levels.length)],
     service: services[Math.floor(Math.random() * services.length)],
-    message: `test log message ${Math.random()}`,
-    attributes: {
-      user_id: String(Math.floor(Math.random() * 1000)),
-      region: 'eu-west',
-    },
+    message: `load test entry ${Math.random()}`,
+    attributes: { user_id: String(Math.floor(Math.random() * 1000)), region: 'eu-west' },
   };
 }
 
 export default function () {
-  const batchSize = 700;
+  const batchSize = 50;
   const logs = [];
   for (let i = 0; i < batchSize; i++) {
     logs.push(randomLog());

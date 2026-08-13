@@ -1,14 +1,16 @@
 import http from 'k6/http';
 
+const TARGET_LOGS = 1000000;
+const BATCH_SIZE = 1000;
+const TOTAL_BATCHES = Math.ceil(TARGET_LOGS / BATCH_SIZE);
+
 export const options = {
   scenarios: {
     seeding: {
-      executor: 'constant-arrival-rate',
-      rate: 15,
-      timeUnit: '1s',
-      duration: '90s',
-      preAllocatedVUs: 30,
-      maxVUs: 100,
+      executor: 'shared-iterations',
+      vus: 20,
+      iterations: TOTAL_BATCHES,
+      maxDuration: '5m',
     },
   },
 };
@@ -17,7 +19,7 @@ function randomLog() {
   const levels = ['debug', 'info', 'warn', 'error'];
   const services = ['checkout', 'auth', 'payment', 'inventory'];
   const now = Date.now();
-  const randomPast = now - Math.floor(Math.random() * 30 * 24 * 60 * 60 * 1000); // بيانات موزعة على آخر 30 يوم
+  const randomPast = now - Math.floor(Math.random() * 30 * 24 * 60 * 60 * 1000);
   return {
     timestamp: new Date(randomPast).toISOString(),
     level: levels[Math.floor(Math.random() * levels.length)],
@@ -31,9 +33,8 @@ function randomLog() {
 }
 
 export default function () {
-  const batchSize = 700;
   const logs = [];
-  for (let i = 0; i < batchSize; i++) {
+  for (let i = 0; i < BATCH_SIZE; i++) {
     logs.push(randomLog());
   }
 

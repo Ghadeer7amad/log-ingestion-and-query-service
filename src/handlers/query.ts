@@ -28,13 +28,13 @@ export async function getLogsHandler(req: Request, res: Response) {
       const lastItem = items[items.length - 1];
       const payload = JSON.stringify({
         timestamp: new Date(lastItem.timestamp).toISOString(),
-        id: lastItem.id,
+        id: Number(lastItem.id),
       });
       next_cursor = Buffer.from(payload).toString('base64');
     }
 
     const logs = items.map((item) => ({
-      id: item.id,
+      id: String(item.id),
       timestamp: new Date(item.timestamp).toISOString(),
       level: item.level,
       service: item.service,

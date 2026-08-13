@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Start services with Docker Compose
+        run: docker compose up --build -d
+
+      - name: Wait for health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health; then
+              echo "Service is healthy"
+              exit 0
+            fi
+            echo "Waiting for service..."
+            sleep 2
+          done
+          echo "Service failed to become healthy"
+          exit 1
+
+      - name: Smoke test - POST /logs (valid batch)
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8080/logs \
+            -H "Content-Type: application/json" \
+            -d '{"logs":[{"timestamp":"2026-08-12T14:00:00Z","level":"info","service":"ci-test","message":"smoke test","attributes":{}}]}')
+          status=$(echo "$response" | tail -n1)
+          if [ "$status" != "200" ]; then
+            echo "Expected 200, got $status"
+            exit 1
+          fi
+          echo "POST /logs OK"
+
+      - name: Smoke test - GET /logs
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/logs?limit=5")
+          if [ "$status" != "200" ]; then
+            echo "Expected 200, got $status"
+            exit 1
+          fi
+          echo "GET /logs OK"
+
+      - name: Smoke test - GET /logs/aggregate
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/logs/aggregate?since=2026-08-01T00:00:00Z&until=2026-08-13T00:00:00Z&bucket=1h")
+          if [ "$status" != "200" ]; then
+            echo "Expected 200, got $status"
+            exit 1
+          fi
+          echo "GET /logs/aggregate OK"
+
+      - name: Smoke test - malformed JSON returns 400
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/logs \
+            -H "Content-Type: application/json" \
+            -d '{invalid json')
+          if [ "$status" != "400" ]; then
+            echo "Expected 400, got $status"
+            exit 1
+          fi
+          echo "Malformed JSON validation OK"
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -1,4 +1,4 @@
-import { db } from "../index.js";
+import { writeDb } from "../index.js";
 import { sql } from "drizzle-orm";
 import { config } from "../../config.js";
 
@@ -13,7 +13,7 @@ export async function cleanExpiredLogs() {
     let totalDeleted = 0;
 
     while (true) {
-      const result = await db.execute(
+      const result = await writeDb.execute(
         sql`
           DELETE FROM logs
           WHERE id IN (

@@ -1,4 +1,4 @@
-import { db } from "../index.js";
+import { readDb } from "../index.js";
 import { logs } from "../schema.js";
 import { sql, SQL, and, eq, gte, lt, ilike } from "drizzle-orm";
 
@@ -54,7 +54,7 @@ export async function fetchAggregateLogsFromDb(params: AggregateParams) {
     ? logs.level 
     : sql`NULL`;
 
-  let queryBuilder = db
+  let queryBuilder = readDb
     .select({
       start: bucketSql,
       group: groupFieldSql,

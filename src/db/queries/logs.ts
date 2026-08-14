@@ -1,4 +1,4 @@
-import { queryClient } from '../index.js';
+import { writeClient } from '../index.js';
 import { ValidatedLog } from '../../validators/ingest.js';
 
 export async function insertValidLogsBulk(validLogs: ValidatedLog[]): Promise<number> {
@@ -26,7 +26,7 @@ export async function insertValidLogsBulk(validLogs: ValidatedLog[]): Promise<nu
       attributesList[j] = JSON.stringify(log.attributes || {});
     }
 
-    const result = await queryClient`
+    const result = await writeClient`
       INSERT INTO logs (timestamp, level, service, message, attributes)
       SELECT 
         t.timestamp::timestamptz,

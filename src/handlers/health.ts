@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { queryClient } from '../db/index.js';
+import { readClient } from '../db/index.js';
 
 let isAppReady = false;
 
@@ -18,7 +18,7 @@ export const healthHandler = async (req: Request, res: Response): Promise<void> 
   }
   
   try {
-    await queryClient`SELECT 1`;
+    await readClient`SELECT 1`;
     res.status(200).json({ status: 'ok' });
   } catch (error) {
     console.error('Health check DB failed:', error);

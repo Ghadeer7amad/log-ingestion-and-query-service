@@ -1,4 +1,4 @@
-import { queryClient } from '../index.js';
+import { readClient } from '../index.js';
 
 interface GetLogsQueryParams {
   service?: string;
@@ -16,24 +16,24 @@ export async function findLogs(params: GetLogsQueryParams) {
 
   const conditions = [];
 
-  if (service) conditions.push(queryClient`service = ${service}`);
-  if (level) conditions.push(queryClient`level = ${level}`);
-  if (sinceDate) conditions.push(queryClient`timestamp >= ${sinceDate.toISOString()}::timestamptz`);
-  if (untilDate) conditions.push(queryClient`timestamp < ${untilDate.toISOString()}::timestamptz`);
-  if (q) conditions.push(queryClient`message ILIKE ${'%' + q + '%'}`);
+  if (service) conditions.push(readClient`service = ${service}`);
+  if (level) conditions.push(readClient`level = ${level}`);
+  if (sinceDate) conditions.push(readClient`timestamp >= ${sinceDate.toISOString()}::timestamptz`);
+  if (untilDate) conditions.push(readClient`timestamp < ${untilDate.toISOString()}::timestamptz`);
+  if (q) conditions.push(readClient`message ILIKE ${'%' + q + '%'}`);
   if (Object.keys(attributes).length > 0) {
-    conditions.push(queryClient`attributes @> ${JSON.stringify(attributes)}::jsonb`);
+    conditions.push(readClient`attributes @> ${JSON.stringify(attributes)}::jsonb`);
   }
   if (parsedCursor) {
     const cursorDate = new Date(parsedCursor.timestamp).toISOString();
-    conditions.push(queryClient`(timestamp, id) < (${cursorDate}::timestamptz, ${parsedCursor.id})`);
+    conditions.push(readClient`(timestamp, id) < (${cursorDate}::timestamptz, ${parsedCursor.id})`);
   }
 
   const whereClause = conditions.length
-    ? queryClient`WHERE ${conditions.reduce((acc, cond, i) => (i === 0 ? cond : queryClient`${acc} AND ${cond}`))}`
-    : queryClient``;
+    ? readClient`WHERE ${conditions.reduce((acc, cond, i) => (i === 0 ? cond : readClient`${acc} AND ${cond}`))}`
+    : readClient``;
 
-  const rows = await queryClient`
+  const rows = await readClient`
     SELECT id, timestamp, level, service, message, attributes
     FROM logs
     ${whereClause}

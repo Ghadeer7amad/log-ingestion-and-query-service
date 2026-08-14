@@ -41,13 +41,8 @@ export async function fetchAggregateLogsFromDb(params: AggregateParams) {
   if (q) conditions.push(ilike(logs.message, `%${q}%`));
 
   if (attributes) {
-    // attr.<key> values always arrive as plain strings from the query
-    // string, so match against attributesSearch (every value stringified)
-    // instead of the raw `attributes` column -- otherwise numeric/boolean
-    // attribute values could never match (JSONB containment requires exact
-    // type equality).
     for (const [key, value] of Object.entries(attributes)) {
-      conditions.push(sql`${logs.attributesSearch} @> ${JSON.stringify({ [key]: value })}::jsonb`);
+      conditions.push(sql`${logs.attributes} @> ${JSON.stringify({ [key]: value })}::jsonb`);
     }
   }
 

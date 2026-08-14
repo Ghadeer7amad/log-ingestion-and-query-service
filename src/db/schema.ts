@@ -1,5 +1,4 @@
 import { pgTable, bigserial, timestamp, varchar, text, jsonb, index } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 export const logs = pgTable('logs', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
@@ -11,18 +10,11 @@ export const logs = pgTable('logs', {
     .$type<Record<string, string | number | boolean>>()
     .default({})
     .notNull(),
-  // Every attribute value stringified (number/boolean/string alike), so
-  // attr.<key> containment filters -- whose values always arrive as plain
-  // strings from the query string -- match regardless of the original
-  // stored type. Populated by Postgres on write; the app never writes to it.
-  attributesSearch: jsonb('attributes_search')
-    .$type<Record<string, string>>()
-    .generatedAlwaysAs(sql`jsonb_stringify_values(attributes)`),
 }, (table) => [
   index('idx_logs_timestamp_id').on(table.timestamp.desc(), table.id.desc()),
   index('idx_logs_service_timestamp').on(table.service, table.timestamp),
   index('idx_logs_level_timestamp').on(table.level, table.timestamp),
-  index('idx_logs_attributes_search_gin').using('gin', table.attributesSearch.op('jsonb_path_ops')),
+  index('idx_logs_attributes_gin').using('gin', table.attributes),
 ]);
 
 export type Log = typeof logs.$inferSelect;

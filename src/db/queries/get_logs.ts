@@ -22,12 +22,7 @@ export async function findLogs(params: GetLogsQueryParams) {
   if (untilDate) conditions.push(readClient`timestamp < ${untilDate.toISOString()}::timestamptz`);
   if (q) conditions.push(readClient`message ILIKE ${'%' + q + '%'}`);
   if (Object.keys(attributes).length > 0) {
-    // attr.<key> values always arrive as plain strings from the query
-    // string, so match against attributes_search (every value stringified)
-    // instead of the raw `attributes` column -- otherwise numeric/boolean
-    // attribute values could never match (JSONB containment requires exact
-    // type equality).
-    conditions.push(readClient`attributes_search @> ${JSON.stringify(attributes)}::jsonb`);
+    conditions.push(readClient`attributes @> ${JSON.stringify(attributes)}::jsonb`);
   }
   if (parsedCursor) {
     const cursorDate = new Date(parsedCursor.timestamp).toISOString();

@@ -1,4 +1,4 @@
-import { insertLogsCopy } from './logs.js';
+import { insertLogsRaw } from './logs.js';
 import { ValidatedLog } from '../../validators/ingest.js';
 
 // Coalesces concurrent POST /logs requests' already-validated rows into
@@ -60,7 +60,7 @@ function flush(): void {
 
   const allLogs = batch.flatMap((req) => req.logs);
 
-  insertLogsCopy(allLogs)
+  insertLogsRaw(allLogs)
     .then(() => {
       for (const req of batch) req.resolve(req.logs.length);
     })

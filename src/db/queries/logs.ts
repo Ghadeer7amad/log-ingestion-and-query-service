@@ -52,7 +52,18 @@ export async function insertLogsRaw(validLogs: ValidatedLog[]): Promise<number> 
 // would otherwise try to interpret). Escaping the backslash first also
 // protects a literal "\N" message from being misread as COPY's NULL
 // sentinel, since it becomes "\\N" (a literal backslash + N) once escaped.
+//
+// Fast path: --prof profiling under load showed this function (inlined into
+// insertLogsCopy by V8) as the single largest CPU hot spot in the app, and
+// GC costing more than raw JS execution -- consistent with the 4 regex
+// .replace() calls allocating a new string each, on every field, even
+// though the overwhelming majority of real log messages contain none of
+// these characters. Testing once up front avoids all 4 allocations (and
+// the original string, unchanged) in that common case.
+const NEEDS_ESCAPE = /[\\\t\n\r]/;
+
 function escapeCopyField(value: string): string {
+  if (!NEEDS_ESCAPE.test(value)) return value;
   return value
     .replace(/\\/g, '\\\\')
     .replace(/\t/g, '\\t')

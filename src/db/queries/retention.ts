@@ -32,13 +32,6 @@ export async function cleanExpiredLogs() {
       await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS));
     }
 
-    // Rollup rows are tiny relative to raw logs (bounded by
-    // minutes x services x levels, not row count) so a single unbatched
-    // delete is fine -- no long-running-lock concern here.
-    await writeDb.execute(
-      sql`DELETE FROM logs_rollup_minute WHERE bucket_start < NOW() - make_interval(days => ${retentionDays})`
-    );
-
     console.log(`[Retention Strategy] Cleanup completed. Total deleted: ${totalDeleted}`);
   } catch (error) {
     console.error("[Retention Strategy] Error during logs cleanup:", error);

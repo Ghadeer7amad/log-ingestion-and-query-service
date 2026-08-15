@@ -1,4 +1,4 @@
-import { pgTable, bigserial, bigint, timestamp, varchar, text, jsonb, index, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, bigserial, timestamp, varchar, text, jsonb, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const logs = pgTable('logs', {
@@ -27,22 +27,3 @@ export const logs = pgTable('logs', {
 
 export type Log = typeof logs.$inferSelect;
 export type NewLog = typeof logs.$inferInsert;
-
-// Pre-aggregated per-minute counts by (service, level), kept fresh by a
-// periodic background job (see queries/rollup.ts) rather than on the write
-// path -- ingestion CPU is the proven bottleneck, so nothing here may add
-// per-insert cost. GET /logs/aggregate reads from this table instead of
-// scanning `logs` whenever the request has no `q` or `attr.<key>` filters
-// (the common case, and the only shape the load generator's aggregate probe
-// ever sends); those two filters still require the raw-table scan since
-// they aren't part of this table's grouping key.
-export const logsRollupMinute = pgTable('logs_rollup_minute', {
-  bucketStart: timestamp('bucket_start', { withTimezone: true }).notNull(),
-  service: varchar('service', { length: 255 }).notNull(),
-  level: varchar('level', { length: 10 }).notNull(),
-  count: bigint('count', { mode: 'number' }).notNull(),
-}, (table) => [
-  primaryKey({ columns: [table.bucketStart, table.service, table.level] }),
-]);
-
-export type LogsRollupMinute = typeof logsRollupMinute.$inferSelect;

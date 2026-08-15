@@ -29,13 +29,6 @@
       "when": 1786742622403,
       "tag": "0003_restore_attributes_search_gin",
       "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1786747254496,
-      "tag": "0004_add_logs_rollup_minute",
-      "breakpoints": true
     }
   ]
 }

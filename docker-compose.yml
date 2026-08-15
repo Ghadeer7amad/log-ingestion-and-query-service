@@ -3,8 +3,8 @@ services:
     image: postgres:15-alpine
     command: >
       postgres
-      -c shared_buffers=256MB
-      -c effective_cache_size=768MB
+      -c shared_buffers=400MB
+      -c effective_cache_size=700MB
       -c maintenance_work_mem=64MB
       -c work_mem=8MB
       -c max_wal_size=2GB

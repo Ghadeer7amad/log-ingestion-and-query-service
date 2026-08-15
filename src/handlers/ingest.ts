@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { validateAndTransformLog, ValidatedLog } from '../validators/ingest.js';
-import { insertValidLogsBulk } from '../db/queries/logs.js';
+import { enqueueLogsForInsert } from '../db/queries/ingestQueue.js';
 import { BadRequestError } from '../middlewares/errorHandler.js';
 
 export const ingestLogsHandler = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -34,7 +34,7 @@ export const ingestLogsHandler = async (req: Request, res: Response, next: NextF
       return;
     }
 
-    const acceptedCount = await insertValidLogsBulk(validLogs);
+    const acceptedCount = await enqueueLogsForInsert(validLogs);
 
     res.status(200).json({
       accepted: acceptedCount,

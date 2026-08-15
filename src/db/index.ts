@@ -10,8 +10,18 @@ import * as schema from './schema.js';
 // read request queued behind them in postgres.js's internal queue -- this
 // measured as ~80% aggregate failures / p95 near the request timeout during
 // a combined 120s ingestion+aggregate load test.
+//
+// max is deliberately small (was 16): on a single-CPU Postgres container,
+// more concurrent write backends doesn't mean more throughput past the core
+// count -- it was proven (five separate load tests, including one against a
+// 48-row rollup table with a trivial query) to mean more OS-scheduler
+// contention, starving read backends of CPU time regardless of how cheap
+// their query is. Paired with write coalescing (see
+// queries/ingestQueue.ts), which converts many small concurrent inserts
+// into far fewer, larger ones, so this pool rarely needs more than a
+// couple of connections active at once anyway.
 export const writeClient = postgres(config.db.url, {
-    max: 16,
+    max: 6,
     idle_timeout: 30,
     connect_timeout: 10,
 });

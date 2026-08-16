@@ -1,0 +1,13 @@
+-- Reverts the UNLOGGED table from migration 0001. Re-measured after the
+-- CPU-throttling and shared_buffers fixes (README Section 9): three
+-- durability postures (UNLOGGED+async, LOGGED+fsync-on+async,
+-- LOGGED+fsync-on+sync-on) showed no throughput difference distinguishable
+-- from run-to-run noise at this point in the investigation -- the dominant
+-- cost is still Postgres CPU/scheduling contention, not WAL/fsync I/O.
+-- Meanwhile UNLOGGED's real cost already happened twice this session: the
+-- table was silently truncated on ordinary container restarts, not just
+-- genuine crashes, which conflicts with the spec's "never respond 200 to a
+-- batch you have not durably accepted." No measured throughput reason left
+-- to keep it, and a real, already-observed compliance/data-loss risk to
+-- drop it.
+ALTER TABLE logs SET LOGGED;

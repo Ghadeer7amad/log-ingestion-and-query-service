@@ -31,9 +31,16 @@ export class NotFoundError extends Error {
 
 
 export class TooManyRequestsError extends Error {
-  constructor(message: string) {
+  // Seconds the client should wait before retrying. Fixed, not computed from
+  // an actual queue-drain estimate -- current instrumentation (outstanding
+  // row count) doesn't give a reliable ETA, so a conservative constant is
+  // used instead of a precise-looking number that isn't actually precise.
+  retryAfterSeconds: number;
+
+  constructor(message: string, retryAfterSeconds: number = 2) {
     super(message);
     this.name = "TooManyRequestsError";
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -64,6 +71,7 @@ export function errorHandler(
   }
 
   if (err instanceof TooManyRequestsError) {
+    res.set("Retry-After", String(err.retryAfterSeconds));
     return res.status(429).json({ error: err.message });
   }
 

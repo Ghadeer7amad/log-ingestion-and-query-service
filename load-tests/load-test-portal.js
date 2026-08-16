@@ -68,6 +68,9 @@ export const paginate_latency = new Trend('paginate_latency_ms', true);
 export const paginate_success_rate = new Rate('paginate_success_rate');
 
 export const overall_latency = new Trend('overall_latency_ms', true);
+export const shed_429_count = new Counter('shed_429_count');
+export const shed_429_latency = new Trend('shed_429_latency_ms', true);
+export const shed_429_has_retry_after = new Rate('shed_429_has_retry_after');
 
 export const options = {
   scenarios: {
@@ -147,6 +150,11 @@ export function ingest() {
   ingest_success_rate.add(ok);
   ingest_latency.add(dur);
   overall_latency.add(dur);
+  if (res.status === 429) {
+    shed_429_count.add(1);
+    shed_429_latency.add(dur);
+    shed_429_has_retry_after.add(!!res.headers['Retry-After']);
+  }
   if (ok) {
     try {
       const body = JSON.parse(res.body);

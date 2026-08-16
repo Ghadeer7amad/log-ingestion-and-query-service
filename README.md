@@ -4,9 +4,9 @@ High-throughput log ingestion, querying, and aggregation service (Node.js, TypeS
 
 Repository: https://github.com/Ghadeer7amad/log-ingestion-and-query-service
 
-**Status at a glance:** ingestion, querying, aggregation, retention, and cursor pagination are all implemented and correct — including a fix to a real `attr.<key>` filtering bug found and fixed this session (Section 5). The connection pool is split between reads and writes so sustained ingestion can't starve `GET` requests of a connection (Section 3). A deep investigation (six-plus independent load-test configurations) found and proved the actual throughput bottleneck: OS-scheduler CPU contention on the single-core Postgres container under sustained high-frequency writes — not query cost, not indexes, not memory tuning, not connection pool size (Section 6, Section 10). Write coalescing, and then an in-memory aggregate cache that bypasses Postgres for the common read case, were both implemented in direct response to that finding and measurably help. A faster `COPY`-based write path was tried, measured better, and reverted after it was found to crash the process under load — see Section 6 for the full story.
+**Status at a glance:** ingestion, querying, aggregation, retention, and cursor pagination are all implemented and correct — including a fix to a real `attr.<key>` filtering bug found and fixed this session (Section 5), and a second real bug where an unindexed sort order silently full-table-scanned `GET /logs` at 1M-row scale (Section 4). The connection pool is split between reads and writes so sustained ingestion can't starve `GET` requests of a connection (Section 3). A deep investigation found and proved the actual throughput bottleneck: OS-scheduler CPU contention on the single-core Postgres container under sustained high-frequency writes, compounded by Docker's default 100ms CFS accounting period silently freezing both containers for large fractions of every load test (Section 6, Section 10). Write coalescing, an in-memory aggregate cache that bypasses Postgres for the common read case, and a longer CFS accounting period (same average CPU, no limit raised) were all implemented in direct response to these findings and measurably help. A faster `COPY`-based write path was tried, measured better, and reverted after it was found to crash the process under load — see Section 6 for the full story.
 
-**Tested at actual target scale.** Every number below was re-measured with **1,000,000 rows already resident** (not a fresh/empty table) — seeded directly, backdated across ~30 days, matching the spec's "~1M rows ≈ 1 month" framing exactly. This matters: performance at 1M rows is measurably worse than at a fresh/near-empty table (Section 9), which the smaller-scale numbers alone would have hidden. **Current state at 1M-row scale: ~10% aggregate success rate and ~2,500 logs/sec sustained under the hardest combined ingestion+aggregate load test, zero application crashes.** 15,000 logs/sec and full aggregate availability under peak sustained load remain the two open gaps; the root cause is proven, not guessed at, and further Postgres tuning is in progress.
+**Tested at actual target scale.** Every number below was re-measured with **1,000,000 rows already resident** (not a fresh/empty table) — seeded directly, backdated across ~30 days, matching the spec's "~1M rows ≈ 1 month" framing exactly. This matters: performance at 1M rows was measurably worse than at a fresh/near-empty table at Docker's default CFS period (Section 9), which the smaller-scale numbers alone would have hidden. **Current state at 1M-row scale: 35.00% aggregate success rate and ~4,392 logs/sec sustained under the hardest combined ingestion+aggregate load test, zero application crashes.** 15,000 logs/sec and full aggregate availability under peak sustained load remain the two open gaps; the root causes are proven, not guessed at.
 
 ---
 
@@ -97,6 +97,8 @@ CREATE TABLE logs (
 
 Kept to 4 indexes deliberately — each adds write cost on a 1-CPU container. Dropping all but the primary key and `idx_logs_timestamp_id` was tested directly as part of the CPU-contention investigation (Section 10) — it measurably cooled Postgres down but did not fix aggregate availability under load, which is itself useful evidence: index maintenance cost is real but was never the dominant bottleneck. `q` uses unindexed `ILIKE` (see Known Limitations).
 
+**Bug found and fixed this session: `idx_logs_timestamp_id` was silently unused by `GET /logs`.** Drizzle's index-builder always emits `DESC NULLS LAST` for a `.desc()` column, so the index is defined as `("timestamp" DESC NULLS LAST, id DESC NULLS LAST)`. The application's query ([`get_logs.ts`](src/db/queries/get_logs.ts)) sorted with plain `ORDER BY timestamp DESC, id DESC` — Postgres's default for bare `DESC` is `NULLS FIRST`, which doesn't textually match the index, so the planner silently fell back to a full (parallel) sequential scan for every unfiltered listing and every cursor-paginated page. Invisible at small scale; at 1,000,000 rows it cost **~2.1s per unfiltered request and ~1.5s per paginated page**, confirmed via `EXPLAIN (ANALYZE, BUFFERS)` and reproduced through the live API. Fix: made the `NULLS LAST` explicit in the query's `ORDER BY` to match the index exactly — zero behavior change, since `timestamp`/`id` are both `NOT NULL`. Measured after the fix: **~10–45ms unfiltered, ~9–15ms paginated**, a 100–1000x improvement. Neither of this project's own k6 scripts calls plain `GET /logs` or cursor pagination, which is why this went undetected until a direct index audit against `pg_stat_user_indexes` and hand-written `EXPLAIN` queries turned it up.
+
 ---
 
 ## 5. Attribute Storage Strategy
@@ -156,6 +158,32 @@ The cache is updated synchronously inside the ingest flush path — only after `
 
 This was verified correct at 1,000,000-row scale, not just assumed: a direct SQL count over a fixed `since`/`until` window matched the cache's output byte-for-byte across every service (510,860 total rows, identical per-service breakdown) — see Section 9.
 
+### CPU throttling: the resource limits weren't the smooth constraint they looked like
+
+Every measurement up to this point treated "1 CPU" and "0.5 CPU" as smooth, continuous ceilings — contention was assumed to look like many runnable processes taking turns on a slower core. Reading each container's cgroup counters directly (`/sys/fs/cgroup/cpu.stat`) told a different story. Docker's `cpus:` limit is enforced through the Linux CFS bandwidth controller: a quota of CPU-time per accounting period, **100ms by default**. Once a container spends its quota inside a period, it is not slowed down — it is **frozen solid, scheduler-invisible, for whatever remains of that period**, no matter how much the host's other 7 cores sit idle.
+
+Measured on the Postgres container after a 60s combined load test at the default 100ms period:
+
+```
+nr_periods 585        -- 100ms windows observed
+nr_throttled 319       -- 54.5% of windows hit the freeze
+throttled_usec 55.56s  -- ~95% of the 58.5s window spent completely paused
+```
+
+The **app** container (0.5 CPU) was worse — throttled in over 99% of its periods even under light load, something `docker stats`' rolling CPU-percentage average completely hides (a bursty, mostly-idle-then-a-JSON-parse-spike Node process can average 48% CPU while still hitting its 100ms quota wall on nearly every burst). This is the real mechanism behind the bimodal aggregate latency seen everywhere in this document (either a few ms or a 60s timeout, nothing in between) — that pattern is the signature of periodic freezing, not gradual scheduling contention.
+
+**Fix: lengthen the accounting period, keep the same average CPU.** `cpu_period`/`cpu_quota` replace the `cpus:` shorthand in `docker-compose.yml` so quota always equals the same fraction of a longer period (1.0 CPU / 0.5 CPU unchanged). Tested a curve, not just one value, 60s runs against the 1,000,000-row database:
+
+| Period | Aggregate success | Logs/sec | Ingest success | Postgres throttled | App throttled |
+|---|---|---|---|---|---|
+| 100ms (Docker default) | 20.00% | 2,235 | 86.63% | 54.5% of periods | 99.1% of periods |
+| 500ms | 60.00% | 2,883 | 88.49% | 25.0% of periods | 96.5% of periods |
+| 1000ms | 90.00% / 100.00% / 100.00% (3 runs) | 3,726 / 5,275 / 5,067 | 91.77% / 98.82% / 99.87% | 11.9% → 5.9% of periods | ~97% of periods |
+
+**1000ms is both the clear winner and a hard wall, not a judgment call.** Linux's kernel caps `cpu.cfs_period_us` at 1,000,000 (1 second) — an attempted 2000ms setting failed outright (`docker update` returned an error) and the run silently continued on the prior 1000ms config, confirmed via `cpu.max` before and after. The curve was still improving at every step up to that ceiling; there was no observed point where longer periods stopped helping, only the point where Linux stops allowing longer periods at all. The app container's throttled-period *ratio* barely moved across the whole curve (~99%→~97%) even as overall results improved sharply — its 0.5 CPU quota appears to be consistently, not just burstily, short of what it wants under this load, so a longer window mostly changes freeze *granularity* for the app, not whether it freezes. Postgres, by contrast, responded strongly (54.5%→5.9% throttled) — consistent with genuinely bursty rather than sustained demand.
+
+On the standard 120s combined test (the same methodology used everywhere else in this document, distinct from the shorter 60s curve-sweep runs above): **35.00% aggregate success (7/20), 4,392 logs/sec, 94.63% ingest success, 0 crashes** at the 1000ms setting — versus 10.00% / 2,520.6 / 85.20% at the previous 100ms default. A genuine ~3.5x aggregate-availability gain and ~74% throughput gain, from a two-line Docker Compose change, found by reading cgroup counters nobody had looked at earlier in this investigation. Zero application code changed; zero durability/behavior change; zero average-CPU change.
+
 ---
 
 ## 7. Retention Strategy
@@ -172,22 +200,22 @@ Configurable via `RETENTION_DAYS` (default 30). Deletes in batches of 5,000 with
 
 ## 9. Load-Test Methodology & Results
 
-**Tools:** [k6](https://k6.io) (primary — `load-tests/load-test.js`, `load-tests/load-test-full.js`, `load-tests/seed-data.js`) and [autocannon](https://github.com/mcollina/autocannon) (secondary — `load-tests/autocannon-get.js`, `load-tests/autocannon-test.js`), both included in the repo. **Environment:** exact grading limits (Postgres 1 CPU/1GB, App 0.5 CPU/256MB), confirmed active via `docker inspect` and `docker stats` throughout.
+**Tools:** [k6](https://k6.io) (primary — `load-tests/load-test.js`, `load-tests/load-test-full.js`, `load-tests/seed-data.js`) and [autocannon](https://github.com/mcollina/autocannon) (secondary — `load-tests/autocannon-get.js`, `load-tests/autocannon-test.js`), both included in the repo. **Environment:** exact grading limits (Postgres 1 CPU/1GB, App 0.5 CPU/256MB), confirmed active via `docker inspect` and `docker stats` throughout, with the CFS accounting period raised to 1000ms (Section 6) — same average CPU, same limits, longer accounting window.
 
 **Primary test:** `load-test-full.js` — 120s combined run: sustained ingestion at 300 iterations/sec × 50 logs/batch (15,000/sec target), 1 aggregate request/sec throughout, and a continuous freshness probe (write then poll until visible, ≤20s budget).
 
 **Dataset size — the headline numbers below are measured with 1,000,000 rows already resident, not a fresh table.** The database was seeded with exactly 1,000,000 rows via a single server-side `INSERT ... SELECT FROM generate_series(1, 1000000)` (114.7s to seed, no per-row network round-trip), timestamps spanning 2026-07-17 → 2026-08-16 (~30 days, matching the spec's "~1M rows ≈ 1 month" framing). Table + index footprint at seed time: 359MB (table 205MB, indexes 154MB), 0 dead tuples. The load test then adds ~370,000 more rows on top during its 120s run. This is the honest, target-scale number — a fresh/empty-table run was also kept as a comparison baseline, shown below, because the two are measurably different and reporting only the fresh-table number would have hidden a real regression.
 
-| Metric | **1M-row (primary)** | Fresh-DB (comparison baseline) | Target |
-|---|---|---|---|
-| Aggregate success rate | **10.00% (2/20)** | 35.00% (7/20) | — |
-| Logs/sec (sustained) | **2,520.6/sec** | ~4,967/sec | 15,000/sec |
-| Ingest success rate | **85.20%** | 92.11% | >99.9% |
-| Application crashes | **0** | 0 | 0 |
-| App memory | ~130–139MiB | ~40–50MiB | <256MB |
-| Postgres memory | 530–572MiB | ~150–250MiB | <1GB |
+| Metric | **1M-row, current (1000ms CFS period)** | 1M-row, 100ms period (Docker default) | Fresh-DB, 100ms period | Target |
+|---|---|---|---|---|
+| Aggregate success rate | **35.00% (7/20)** | 10.00% (2/20) | 35.00% (7/20) | — |
+| Logs/sec (sustained) | **4,392.3/sec** | 2,520.6/sec | ~4,967/sec | 15,000/sec |
+| Ingest success rate | **94.63%** | 85.20% | 92.11% | >99.9% |
+| Application crashes | **0** | 0 | 0 | 0 |
+| App memory | ~130–139MiB | ~130–139MiB | ~40–50MiB | <256MB |
+| Postgres memory | 530–572MiB | 530–572MiB | ~150–250MiB | <1GB |
 
-Both throughput and aggregate availability are measurably worse at 1M-row scale than at a fresh table: the larger table/index footprint (482MB after the load test) means more buffer-cache pressure and I/O competing for the same single CPU core, compounding the already-proven CPU-contention bottleneck (Section 6, Section 10). No crash and no data loss at either scale — the regression is in throughput and read availability, not correctness.
+The current column reflects the CPU accounting-period fix (Section 6): same 1M-row dataset, same test, only the Docker Compose CFS period changed (100ms → 1000ms, same average CPU). It closes most of the fresh-vs-1M-row gap seen at the old default — 1M-row aggregate availability now matches the fresh-table number instead of trailing it 25 points behind, and throughput recovers to ~88% of the fresh-table number instead of ~51%. The remaining gap between 1M-row and fresh-DB numbers (both now at the 1000ms period, not shown separately here) is the genuine, still-real cost of the larger table/index footprint under sustained write load (Section 10) — smaller than before, not eliminated.
 
 **Aggregate cache latency and correctness at 1M-row scale:**
 
@@ -213,9 +241,10 @@ The cache's cost scales with how many stored minute-buckets fall inside the requ
 | 7 | `COPY` crashed under sustained load | — | — |
 | 8 | Reverted to `UNNEST`, kept coalescing/pool/timing, no aggregate cache yet | 25.00% | ~5,300 |
 | 9 | **+ in-memory aggregate cache, fresh table** | **35.00%** | **~4,967** |
-| 10 | **Same configuration, re-measured with 1M rows resident** | **10.00% (current headline)** | **2,520.6 (current headline)** |
+| 10 | Same configuration, re-measured with 1M rows resident (100ms CFS period, Docker default) | 10.00% | 2,520.6 |
+| 11 | **Same configuration and dataset, CFS period raised 100ms→1000ms (Section 6)** | **35.00% (current headline)** | **4,392.3 (current headline)** |
 
-Steps 5, 7, and 10 are as important as the improvements — a regression, a crash, and a scale-dependent regression, each discovered through the same measure-first discipline, not assumed away.
+Steps 5, 7, 10, and 11 are as important as the improvements — a regression, a crash, a scale-dependent regression, and a resource-limit-mechanism fix, each discovered through the same measure-first discipline, not assumed away.
 
 **Resources under the primary (1M-row) test:** App memory ~130–139MiB (well under the 256MB budget — the cache now holds a full month of buckets, the expected cost of that design). Postgres memory 530–572MiB (under the 1GB budget). Postgres CPU remains the confirmed, proven bottleneck (Section 6, Section 10); App CPU has never been the constraint at either scale.
 
@@ -224,8 +253,8 @@ Steps 5, 7, and 10 are as important as the improvements — a regression, a cras
 ## 10. Bottlenecks & Known Limitations
 
 - **Root cause of the throughput gap is proven, not guessed: OS-scheduler CPU contention on Postgres's single core under sustained high-frequency writes.** This was established by directly ruling out every other hypothesis — query cost (a 48-row PK-indexed rollup table still couldn't respond), index maintenance (dropping to 2 minimal indexes didn't fix it), memory/buffer tuning (no effect), GIN index batching (no effect), and connection pool size in isolation (non-monotonic — smaller wasn't automatically better). The only interventions that moved the number at all were reducing the *count* of concurrently active write transactions via coalescing, and removing the read's dependency on Postgres entirely via the in-memory aggregate cache. See Section 6 for the full investigation.
-- **15,000 logs/sec is not reached, and the gap is larger at target scale than smaller-scale numbers alone suggested.** Best sustained on a fresh table: ~4,967/sec. At the honest 1,000,000-row scale that matches the spec's stated dataset size, sustained throughput is **2,520.6/sec** — a genuine, unresolved gap against the target, not a claimed success. Further Postgres tuning (`synchronous_commit=off` and related free tuning knobs) is planned next.
-- **Aggregate availability degrades further at target scale.** On a fresh table with the aggregate cache in place, aggregate success under the hardest combined test is 35%. Re-measured with 1,000,000 rows already resident (Section 9), it drops to **10%** — a real, measured regression, not noise. The larger table/index footprint (482MB post-test) adds buffer-cache pressure and I/O contention on top of the already-proven CPU bottleneck. This is the single most important finding from this session's 1M-row verification pass: **numbers measured against a fresh or lightly-loaded database are optimistic relative to true target-scale conditions**, and any report of this system's performance should lead with the 1M-row figures, not the fresh-table ones.
+- **15,000 logs/sec is not reached, and the gap is larger at target scale than smaller-scale numbers alone suggested.** Best sustained on a fresh table: ~4,967/sec. At the honest 1,000,000-row scale that matches the spec's stated dataset size, sustained throughput is **4,392.3/sec** (after the CFS accounting-period fix, Section 6 — 2,520.6/sec before it) — a genuine, unresolved gap against the target, not a claimed success.
+- **Aggregate availability degrades at target scale, though less than it used to.** On a fresh table with the aggregate cache in place, aggregate success under the hardest combined test is 35%. Re-measured with 1,000,000 rows already resident at the old 100ms CFS period, it dropped to 10% — a real, measured regression. After raising the CFS period to 1000ms (Section 6, same average CPU, same 1M-row dataset), 1M-row aggregate success recovered to **35%**, matching the fresh-table number. The lesson from the original regression stands even though the gap has closed: **numbers measured against a fresh or lightly-loaded database can be optimistic relative to true target-scale conditions**, and any report of this system's performance should lead with the 1M-row figures, not the fresh-table ones.
 - **Open compliance question: does the in-memory aggregate cache violate "PostgreSQL remains the source of truth for both reads and writes"?** The cache never accepts a write that wasn't already durably committed to Postgres first (Section 6), and startup backfill plus retention-pruning keep it in lockstep with the database — so Postgres is still the source of truth for what data *exists*. But unfiltered `GET /logs/aggregate` reads are answered from the in-process cache, not from a live Postgres query, whenever no `q`/`attr.<key>` filter is present. Whether that satisfies the spec's intent is a genuine judgment call this README flags rather than resolves — filtered aggregate requests, and all of `GET /logs`, still query Postgres directly and are unaffected either way.
 - **The aggregate cache's latency scales with the number of stored buckets inside the requested window, not with total row count.** Verified at 1M-row scale (Section 9): the realistic access pattern the load generator actually sends (10-minute window, 1-minute buckets) stays under 1s (82–235ms) even with a full month of data resident, but an artificially wide query (15-day window, 1-hour buckets) measured 1.53s — over the 1s target. Not currently a problem given the tested/expected access pattern, but a caveat worth knowing if query patterns change.
 - **`q` has no index** (`ILIKE '%...%'`) — a `pg_trgm` index was deferred to avoid extra write-path cost given the throughput constraint.

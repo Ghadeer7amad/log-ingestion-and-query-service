@@ -24,10 +24,15 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
+    # 1s CFS period (the Linux kernel maximum -- 1,000,000us is the hard
+    # ceiling for cpu.cfs_period_us) instead of Docker's 100ms default.
+    # Same 1.0 average CPU either way; see README Section 6 for the
+    # cgroup-level evidence this is based on.
+    cpu_period: 1000000
+    cpu_quota: 1000000
     deploy:
       resources:
         limits:
-          cpus: '1.0'
           memory: 1G
 
   app:
@@ -41,8 +46,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Same reasoning as postgres above -- 1s period, same 0.5 average CPU.
+    cpu_period: 1000000
+    cpu_quota: 500000
     deploy:
       resources:
         limits:
-          cpus: '0.5'
           memory: 256M

@@ -36,7 +36,15 @@ interface Bucket {
 }
 
 const MINUTE_MS = 60_000;
-const buckets: Map<number, Bucket> = new Map(); // key: minute-epoch (ms, UTC-truncated)
+let buckets: Map<number, Bucket> = new Map(); // key: minute-epoch (ms, UTC-truncated)
+
+// Test-only: the module holds its state at module scope (deliberately --
+// it's a process-lifetime cache, not a per-request object), which unit
+// tests need to reset between cases for isolation. Not called from
+// anywhere in the running app.
+export function __resetForTesting(): void {
+  buckets = new Map();
+}
 
 function minuteKeyOf(timestamp: Date): number {
   return Math.floor(timestamp.getTime() / MINUTE_MS) * MINUTE_MS;

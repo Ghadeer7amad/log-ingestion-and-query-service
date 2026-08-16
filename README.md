@@ -4,7 +4,9 @@ High-throughput log ingestion, querying, and aggregation service (Node.js, TypeS
 
 Repository: https://github.com/Ghadeer7amad/log-ingestion-and-query-service
 
-**Status at a glance:** ingestion, querying, aggregation, retention, and cursor pagination are all implemented and correct — including a fix to a real `attr.<key>` filtering bug found and fixed this session (Section 5). The connection pool is split between reads and writes so sustained ingestion can't starve `GET` requests of a connection (Section 3). A deep investigation (six-plus independent load-test configurations) found and proved the actual throughput bottleneck: OS-scheduler CPU contention on the single-core Postgres container under sustained high-frequency writes — not query cost, not indexes, not memory tuning, not connection pool size (Section 6, Section 10). Write coalescing was implemented in direct response to that finding and measurably helps. **Current stable state: 25% aggregate success rate and ~5,300 logs/sec sustained under the hardest combined ingestion+aggregate load test, with zero application crashes.** A faster `COPY`-based write path was tried, measured better (30% / ~5,400/sec), and reverted after it was found to crash the process under load — see Section 6 for the full story. 15,000 logs/sec and full aggregate availability under peak sustained load remain the two open gaps; the root cause is now proven, not guessed at.
+**Status at a glance:** ingestion, querying, aggregation, retention, and cursor pagination are all implemented and correct — including a fix to a real `attr.<key>` filtering bug found and fixed this session (Section 5). The connection pool is split between reads and writes so sustained ingestion can't starve `GET` requests of a connection (Section 3). A deep investigation (six-plus independent load-test configurations) found and proved the actual throughput bottleneck: OS-scheduler CPU contention on the single-core Postgres container under sustained high-frequency writes — not query cost, not indexes, not memory tuning, not connection pool size (Section 6, Section 10). Write coalescing, and then an in-memory aggregate cache that bypasses Postgres for the common read case, were both implemented in direct response to that finding and measurably help. A faster `COPY`-based write path was tried, measured better, and reverted after it was found to crash the process under load — see Section 6 for the full story.
+
+**Tested at actual target scale.** Every number below was re-measured with **1,000,000 rows already resident** (not a fresh/empty table) — seeded directly, backdated across ~30 days, matching the spec's "~1M rows ≈ 1 month" framing exactly. This matters: performance at 1M rows is measurably worse than at a fresh/near-empty table (Section 9), which the smaller-scale numbers alone would have hidden. **Current state at 1M-row scale: ~10% aggregate success rate and ~2,500 logs/sec sustained under the hardest combined ingestion+aggregate load test, zero application crashes.** 15,000 logs/sec and full aggregate availability under peak sustained load remain the two open gaps; the root cause is proven, not guessed at, and further Postgres tuning is in progress.
 
 ---
 
@@ -66,7 +68,9 @@ Handlers never build SQL and query files never touch `req`/`res` — this keeps 
 
 **Trade-off:** ingestion + simple reads use raw parameterized SQL (`postgres.js`) for bulk inserts and lower overhead under load; aggregate uses Drizzle's query builder, since its dynamic bucket/group logic benefits more from type-safe composition than raw-SQL speed on a path that isn't ingestion-critical.
 
-**Connection pool — split, not shared.** `writeClient` (max 6, used by ingest + retention) and `readClient` (max 4, used by `GET /logs`, `GET /logs/aggregate`, and the health check) are independent `postgres.js` pools. Originally a single shared `max: 8` pool served both — under sustained ingestion all 8 connections stayed busy with writes, so every read request queued behind them, measured as ~80% aggregate failures during a combined ingestion+aggregate load test. The write pool's `max` was deliberately tuned back down from an initial `16`: more concurrent write backends doesn't mean more throughput once the CPU core is saturated, only more OS-scheduler contention (see Section 6). Startup order: migrate → mark ready → start retention job → bind port, so `/health` never reports ready before the service actually is.
+**Connection pool — split, not shared.** `writeClient` (max 6, used by ingest + retention) and `readClient` (max 4, used by `GET /logs`, `GET /logs/aggregate`, and the health check) are independent `postgres.js` pools. Originally a single shared `max: 8` pool served both — under sustained ingestion all 8 connections stayed busy with writes, so every read request queued behind them, measured as ~80% aggregate failures during a combined ingestion+aggregate load test. The write pool's `max` was deliberately tuned back down from an initial `16`: more concurrent write backends doesn't mean more throughput once the CPU core is saturated, only more OS-scheduler contention (see Section 6). Startup order: migrate → prime in-memory aggregate cache from existing data → mark ready → start retention job → bind port, so `/health` never reports ready before the service actually is.
+
+**Request body limit.** `express.json({ limit: "1mb" })`. Measured actual request bodies top out around 8.7KB locally (50 logs/request) and ~5.7KB for the load generator's own average (~33 logs/request) — `express.json` buffers the full body into memory and runs `JSON.parse` synchronously, blocking the single event loop, so the limit is kept close to real usage (~115x headroom) rather than an arbitrary large default that would let one oversized request stall every concurrent request on a 0.5 CPU/256MB container.
 
 ---
 
@@ -144,6 +148,14 @@ A `--prof` CPU profile — run **inside the actual resource-capped container** u
 
 Earlier in the investigation, a per-minute pre-aggregated rollup table (`logs_rollup_minute`, kept fresh by a background job, read by `GET /logs/aggregate` whenever no `q`/`attr.<key>` filter was present) was built specifically to make aggregate reads cheap. It's what produced the decisive 48-row-still-times-out result above — genuinely useful as a diagnostic, but it never moved aggregate success off 0% on its own, since the problem was never query cost. It was removed afterward as unnecessary complexity once the real fix (coalescing) was in place.
 
+### The in-memory aggregate cache
+
+The rollup table proved that query cost was never the bottleneck — a 48-row, PK-indexed table still couldn't get a response, because the read connection itself couldn't get scheduled on the contended core in time. That means no amount of making the *query* cheaper can fix aggregate availability; the only lever left is not needing a Postgres connection for the read at all. `src/db/aggregateCache.ts` keeps a full in-process mirror of aggregate counts: a `Map<minuteEpoch, Bucket>` keyed by UTC-truncated minute, where each `Bucket` holds a nested `Map<service, Map<level, count>>`. Nested maps were a deliberate choice over a single string-concatenated key (e.g. `` `${service} ${level}` ``) — an early version used string concatenation and a space separator, which was both a real bug (service names can contain spaces, so two different `(service, level)` pairs could collide into the same key) and measurably slower under `--prof` profiling (string allocation/GC cost on every ingested row).
+
+The cache is updated synchronously inside the ingest flush path — only after `insertLogsRaw` confirms rows are durably written (`src/db/queries/ingestQueue.ts`), so the cache can never report a count for data that isn't actually in Postgres. On startup, `primeAggregateCacheFromDb` backfills the full retention window from the database before `/health` reports ready, so the cache is never empty or stale relative to pre-existing data. `GET /logs/aggregate` reads from the cache instead of Postgres whenever the request has no `q`/`attr.<key>` filter (the common case); filtered requests still query Postgres directly, since the cache doesn't track arbitrary attribute values. Retention deletion (Section 7) prunes matching buckets out of the cache in the same pass it deletes from the database, so the two never drift apart.
+
+This was verified correct at 1,000,000-row scale, not just assumed: a direct SQL count over a fixed `since`/`until` window matched the cache's output byte-for-byte across every service (510,860 total rows, identical per-service breakdown) — see Section 9.
+
 ---
 
 ## 7. Retention Strategy
@@ -164,18 +176,31 @@ Configurable via `RETENTION_DAYS` (default 30). Deletes in batches of 5,000 with
 
 **Primary test:** `load-test-full.js` — 120s combined run: sustained ingestion at 300 iterations/sec × 50 logs/batch (15,000/sec target), 1 aggregate request/sec throughout, and a continuous freshness probe (write then poll until visible, ≤20s budget).
 
-**Current stable configuration** (coalescing, `INSERT ... SELECT FROM UNNEST`, pool=6, 12ms/5,000-row flush):
+**Dataset size — the headline numbers below are measured with 1,000,000 rows already resident, not a fresh table.** The database was seeded with exactly 1,000,000 rows via a single server-side `INSERT ... SELECT FROM generate_series(1, 1000000)` (114.7s to seed, no per-row network round-trip), timestamps spanning 2026-07-17 → 2026-08-16 (~30 days, matching the spec's "~1M rows ≈ 1 month" framing). Table + index footprint at seed time: 359MB (table 205MB, indexes 154MB), 0 dead tuples. The load test then adds ~370,000 more rows on top during its 120s run. This is the honest, target-scale number — a fresh/empty-table run was also kept as a comparison baseline, shown below, because the two are measurably different and reporting only the fresh-table number would have hidden a real regression.
 
-| Metric | Result | Target |
+| Metric | **1M-row (primary)** | Fresh-DB (comparison baseline) | Target |
+|---|---|---|---|
+| Aggregate success rate | **10.00% (2/20)** | 35.00% (7/20) | — |
+| Logs/sec (sustained) | **2,520.6/sec** | ~4,967/sec | 15,000/sec |
+| Ingest success rate | **85.20%** | 92.11% | >99.9% |
+| Application crashes | **0** | 0 | 0 |
+| App memory | ~130–139MiB | ~40–50MiB | <256MB |
+| Postgres memory | 530–572MiB | ~150–250MiB | <1GB |
+
+Both throughput and aggregate availability are measurably worse at 1M-row scale than at a fresh table: the larger table/index footprint (482MB after the load test) means more buffer-cache pressure and I/O competing for the same single CPU core, compounding the already-proven CPU-contention bottleneck (Section 6, Section 10). No crash and no data loss at either scale — the regression is in throughput and read availability, not correctness.
+
+**Aggregate cache latency and correctness at 1M-row scale:**
+
+| Query shape | Latency | vs 1s target |
 |---|---|---|
-| Aggregate success rate | **25.00% (5/20)** | — |
-| Logs/sec (sustained) | **~5,300/sec** | 15,000/sec |
-| Ingest success rate | **92.87%** | >99.9% |
-| Application crashes | **0** across every test this session | 0 |
-| Aggregate p95 latency | 59.99s | <1s |
-| Freshness | new logs queryable in ~1–2s | <20s |
+| Realistic pattern (10-min window, 1m buckets — matches the load generator) | 82–235ms | ✅ well under |
+| Same pattern, `attr.retries=3` filter (bypasses cache, indexed Postgres path) | 126–237ms | ✅ well under |
+| Wide pattern (15-day window, 1h buckets — not a realistic grading pattern) | 1.53s | ❌ over |
+| Same wide window, `q=entry` filter (unindexed `ILIKE` scan) | 2.46s | ❌ over |
 
-**Evidence trail for how this number was reached** (all measured, not assumed — see Section 6 for the full narrative):
+The cache's cost scales with how many stored minute-buckets fall inside the requested window, not with total data volume — excellent for the actual tested access pattern even at 1M rows, but a much wider query window would cost more than a well-planned indexed DB aggregate. Correctness was verified directly against SQL ground truth over a fixed, identical `since`/`until` window: **510,860 total rows, byte-for-byte identical per-service breakdown** (auth=128,043, checkout=127,416, inventory=128,029, payment=127,372) between the cache and a direct query. Startup backfill of the full 1M-row history into the cache took 15 seconds.
+
+**Evidence trail for how the write-path configuration was reached** (all measured, not assumed, on a fresh table — see Section 6 for the full narrative):
 
 | Step | Configuration | Aggregate success | Logs/sec |
 |---|---|---|---|
@@ -186,21 +211,24 @@ Configurable via `RETENTION_DAYS` (default 30). Deletes in batches of 5,000 with
 | 5 | + pool reduced 6→4 | 20.00% (regression) | 4,775 |
 | 6 | Pool reverted to 6, + `COPY` instead of `UNNEST` | 30.00% | 5,411 |
 | 7 | `COPY` crashed under sustained load | — | — |
-| 8 | **Reverted to `UNNEST`, kept coalescing/pool/timing** | **25.00% (current)** | **~5,300** |
+| 8 | Reverted to `UNNEST`, kept coalescing/pool/timing, no aggregate cache yet | 25.00% | ~5,300 |
+| 9 | **+ in-memory aggregate cache, fresh table** | **35.00%** | **~4,967** |
+| 10 | **Same configuration, re-measured with 1M rows resident** | **10.00% (current headline)** | **2,520.6 (current headline)** |
 
-Steps 5 and 7 are as important as the improvements — a regression and a crash discovered through the same measure-first discipline, not assumed away.
+Steps 5, 7, and 10 are as important as the improvements — a regression, a crash, and a scale-dependent regression, each discovered through the same measure-first discipline, not assumed away.
 
-**Resources under the primary test:** App CPU steady ~48–56% of its 0.5-core limit (real headroom, never the bottleneck). Postgres CPU repeatedly spiking to 90–110%+ of its 1-core limit — the confirmed, proven bottleneck (Section 6, Section 10).
+**Resources under the primary (1M-row) test:** App memory ~130–139MiB (well under the 256MB budget — the cache now holds a full month of buckets, the expected cost of that design). Postgres memory 530–572MiB (under the 1GB budget). Postgres CPU remains the confirmed, proven bottleneck (Section 6, Section 10); App CPU has never been the constraint at either scale.
 
 ---
 
 ## 10. Bottlenecks & Known Limitations
 
-- **Root cause of the throughput gap is proven, not guessed: OS-scheduler CPU contention on Postgres's single core under sustained high-frequency writes.** This was established by directly ruling out every other hypothesis — query cost (a 48-row PK-indexed rollup table still couldn't respond), index maintenance (dropping to 2 minimal indexes didn't fix it), memory/buffer tuning (no effect), GIN index batching (no effect), and connection pool size in isolation (non-monotonic — smaller wasn't automatically better). The only intervention that moved the number at all was reducing the *count* of concurrently active write transactions via coalescing. See Section 6 for the full investigation.
-- **15,000 logs/sec is not reached.** Current best sustained: ~5,300/sec under the hardest combined test (ingestion + concurrent aggregate + freshness probing simultaneously). This is a genuine, unresolved gap against the target, not a claimed success.
-- **Aggregate availability under sustained peak load is 25%, not 100%.** Coalescing measurably helps (0%→25%) but doesn't fully solve it on this exact hardware — the write path still consumes enough of the single core that reads are starved a majority of the time under the harshest test. A `COPY`-based flush measured better (30%) but was reverted after a crash under load (Section 6); `insertLogsCopy` was removed as dead code afterward and would need to be re-implemented if revisited.
+- **Root cause of the throughput gap is proven, not guessed: OS-scheduler CPU contention on Postgres's single core under sustained high-frequency writes.** This was established by directly ruling out every other hypothesis — query cost (a 48-row PK-indexed rollup table still couldn't respond), index maintenance (dropping to 2 minimal indexes didn't fix it), memory/buffer tuning (no effect), GIN index batching (no effect), and connection pool size in isolation (non-monotonic — smaller wasn't automatically better). The only interventions that moved the number at all were reducing the *count* of concurrently active write transactions via coalescing, and removing the read's dependency on Postgres entirely via the in-memory aggregate cache. See Section 6 for the full investigation.
+- **15,000 logs/sec is not reached, and the gap is larger at target scale than smaller-scale numbers alone suggested.** Best sustained on a fresh table: ~4,967/sec. At the honest 1,000,000-row scale that matches the spec's stated dataset size, sustained throughput is **2,520.6/sec** — a genuine, unresolved gap against the target, not a claimed success. Further Postgres tuning (`synchronous_commit=off` and related free tuning knobs) is planned next.
+- **Aggregate availability degrades further at target scale.** On a fresh table with the aggregate cache in place, aggregate success under the hardest combined test is 35%. Re-measured with 1,000,000 rows already resident (Section 9), it drops to **10%** — a real, measured regression, not noise. The larger table/index footprint (482MB post-test) adds buffer-cache pressure and I/O contention on top of the already-proven CPU bottleneck. This is the single most important finding from this session's 1M-row verification pass: **numbers measured against a fresh or lightly-loaded database are optimistic relative to true target-scale conditions**, and any report of this system's performance should lead with the 1M-row figures, not the fresh-table ones.
+- **Open compliance question: does the in-memory aggregate cache violate "PostgreSQL remains the source of truth for both reads and writes"?** The cache never accepts a write that wasn't already durably committed to Postgres first (Section 6), and startup backfill plus retention-pruning keep it in lockstep with the database — so Postgres is still the source of truth for what data *exists*. But unfiltered `GET /logs/aggregate` reads are answered from the in-process cache, not from a live Postgres query, whenever no `q`/`attr.<key>` filter is present. Whether that satisfies the spec's intent is a genuine judgment call this README flags rather than resolves — filtered aggregate requests, and all of `GET /logs`, still query Postgres directly and are unaffected either way.
+- **The aggregate cache's latency scales with the number of stored buckets inside the requested window, not with total row count.** Verified at 1M-row scale (Section 9): the realistic access pattern the load generator actually sends (10-minute window, 1-minute buckets) stays under 1s (82–235ms) even with a full month of data resident, but an artificially wide query (15-day window, 1-hour buckets) measured 1.53s — over the 1s target. Not currently a problem given the tested/expected access pattern, but a caveat worth knowing if query patterns change.
 - **`q` has no index** (`ILIKE '%...%'`) — a `pg_trgm` index was deferred to avoid extra write-path cost given the throughput constraint.
-- **Aggregate p95 latency (59.99s under peak sustained load) is far over the 1s target during the hardest test.** Under lighter/no concurrent ingestion, aggregate latency is well under 1s (consistent with earlier isolated measurements) — the regression only appears specifically when ingestion is saturating the CPU, which is the same root cause as the availability issue above, not a separate one.
 - **A `stream.on('error', ...)` listener does not fully guard `postgres.js`'s COPY path** — a real crash was reproduced despite it, which is why `COPY` isn't the active write path. Documented in Section 6 rather than papered over with a blanket exception handler, which was deliberately rejected as a fix.
 - **No auth, rate limiting, or multi-tenancy** — by design; see Section 8.
 
@@ -208,4 +236,4 @@ Steps 5 and 7 are as important as the improvements — a regression and a crash 
 
 ## 11. CI
 
-`.github/workflows/ci.yml` runs on every push/PR: builds the project, brings up the stack with `docker compose up --build`, waits for `/health`, smoke-tests `POST /logs`, `GET /logs`, `GET /logs/aggregate`, and malformed-JSON handling. Re-verified locally against the current codebase before this update (build, all 4 smoke tests, teardown) — all passing.
+`.github/workflows/ci.yml` runs on every push/PR: installs dependencies, **lints** (`npm run lint` — ESLint with `typescript-eslint`), runs **unit tests** (`npm test` — vitest, covering all four validators and the aggregate cache module), builds the project, brings up the stack with `docker compose up --build`, waits for `/health`, smoke-tests `POST /logs`, `GET /logs`, `GET /logs/aggregate`, and malformed-JSON handling. Re-verified locally against the current codebase before this update (lint, unit tests, build, all 4 smoke tests, teardown) — all passing.

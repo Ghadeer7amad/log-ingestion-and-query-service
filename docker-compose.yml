@@ -57,6 +57,16 @@ services:
       - PORT=8080
       - DB_URL=postgres://postgres:postgres@postgres:5432/logs_db
       - RETENTION_DAYS=30
+      # Crash-safety proven across multiple sustained-load runs targeting
+      # the exact failure mode that crashed the earlier postgres.js-based
+      # COPY attempt (forced query cancellation and connection termination
+      # mid-COPY) -- two real unhandled-error paths were found and fixed
+      # during that testing (db/index.ts's copyPool.on('error', ...) and
+      # copyInsert.ts's client-level error race), not zero. Performance
+      # measured at parity connection-pool size against UNNEST: modest,
+      # consistent improvement on aggregate success, logs/sec, and ingest
+      # success, no regression found. See README for the full numbers.
+      - USE_COPY_INGEST=true
     depends_on:
       postgres:
         condition: service_healthy

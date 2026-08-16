@@ -13,7 +13,15 @@ export type APIConfig = {
 export type DBConfig = {
   url: string;
   migrationConfig: MigrationConfig;
-  retentionDays: number; 
+  retentionDays: number;
+  // Feature flag for the experimental COPY-based write path
+  // (queries/copyInsert.ts), off by default. This project already had one
+  // COPY implementation (via postgres.js) that measured better than
+  // UNNEST and then crashed under sustained load -- flagged so it can be
+  // tested and rolled back instantly without a deploy, and so it never
+  // becomes the default until crash-safety is proven across multiple
+  // sustained-load runs, not just one clean pass.
+  useCopyIngest: boolean;
 };
 
 export type Config = {
@@ -31,6 +39,7 @@ export const config: Config = {
     migrationConfig: {
       migrationsFolder: "./src/db/migrations",
     },
-    retentionDays: Number(process.env.RETENTION_DAYS) || 30, 
+    retentionDays: Number(process.env.RETENTION_DAYS) || 30,
+    useCopyIngest: process.env.USE_COPY_INGEST === "true",
   },
 };

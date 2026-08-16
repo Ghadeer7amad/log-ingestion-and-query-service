@@ -19,6 +19,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
     "@types/pg": "^8.20.4",
+    "@types/pg-copy-streams": "^1.2.5",
     "autocannon": "^8.0.0",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.8.1",
@@ -31,6 +32,7 @@
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
     "pg": "^8.22.0",
+    "pg-copy-streams": "^7.0.0",
     "postgres": "^3.4.9",
     "zod": "^4.4.3"
   }

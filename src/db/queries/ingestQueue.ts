@@ -1,7 +1,13 @@
 import { insertLogsRaw } from './logs.js';
+import { insertLogsCopy } from './copyInsert.js';
 import { ValidatedBatch } from '../../validators/ingest.js';
 import { recordLogs } from '../aggregateCache.js';
 import { TooManyRequestsError } from '../../middlewares/errorHandler.js';
+import { config } from '../../config.js';
+
+// USE_COPY_INGEST=true swaps the flush write path to COPY (copyInsert.ts).
+// Off by default -- see config.ts for why.
+const insertBatch = config.db.useCopyIngest ? insertLogsCopy : insertLogsRaw;
 
 // Coalesces concurrent POST /logs requests' already-validated rows into
 // fewer, larger INSERTs.
@@ -120,7 +126,7 @@ function flush(): void {
     totalCount += b.count;
   }
 
-  insertLogsRaw({ timestamps, levels, services, messages, attributesJson })
+  insertBatch({ timestamps, levels, services, messages, attributesJson })
     .then(() => {
       // Only count rows toward the in-memory aggregate cache once they're
       // confirmed durably written -- same discipline as resolving each

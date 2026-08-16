@@ -8,6 +8,7 @@ import { aggregateLogsHandler } from "./handlers/aggregate.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { logNonOkResponses } from "./middlewares/logger.js";
 import { initRetentionJob } from "./db/queries/retention.js";
+import { primeAggregateCacheFromDb } from "./db/aggregateCache.js";
 
 
 const app = express();
@@ -28,8 +29,10 @@ async function startServer(): Promise<void> {
   try {
     console.log("Running database migrations...");
     await runMigrations();
-    setAppReady(true);
     console.log("Database migrations applied successfully.");
+
+    await primeAggregateCacheFromDb(config.db.retentionDays);
+    setAppReady(true);
 
     initRetentionJob();
 

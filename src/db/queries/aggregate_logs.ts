@@ -1,6 +1,7 @@
 import { readDb } from "../index.js";
 import { logs } from "../schema.js";
 import { sql, SQL, and, eq, gte, lt, ilike, type SQLWrapper } from "drizzle-orm";
+import { queryAggregateCache } from "../aggregateCache.js";
 
 interface AggregateParams {
   service?: string;
@@ -28,7 +29,10 @@ function getBucketSql(bucket: string, column: SQLWrapper) {
   }
 }
 
-export async function fetchAggregateLogsFromDb(params: AggregateParams) {
+// Slow path: scans `logs` directly. Required whenever `q` (message
+// substring) or `attr.<key>` filters are present, since neither is tracked
+// by the in-memory aggregate cache.
+async function fetchAggregateFromRawLogs(params: AggregateParams) {
   const { service, level, since, until, bucket, group_by, q, attributes } = params;
 
   const conditions: SQL[] = [
@@ -77,4 +81,25 @@ export async function fetchAggregateLogsFromDb(params: AggregateParams) {
   }
 
   return queryBuilder.orderBy(bucketSql);
+}
+
+// Fast path: served entirely from the in-memory aggregate cache, no
+// Postgres round trip at all -- see db/aggregateCache.ts for why. Only
+// valid when there's no `q`/`attr.<key>` filter, matching exactly what the
+// load generator's own aggregate probe sends.
+export async function fetchAggregateLogsFromDb(params: AggregateParams) {
+  const hasRawOnlyFilter = !!params.q || (!!params.attributes && Object.keys(params.attributes).length > 0);
+
+  if (!hasRawOnlyFilter) {
+    return queryAggregateCache({
+      since: params.since,
+      until: params.until,
+      bucket: params.bucket,
+      group_by: params.group_by,
+      service: params.service,
+      level: params.level,
+    });
+  }
+
+  return fetchAggregateFromRawLogs(params);
 }

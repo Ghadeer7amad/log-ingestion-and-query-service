@@ -1,5 +1,6 @@
 import { insertLogsRaw } from './logs.js';
 import { ValidatedLog } from '../../validators/ingest.js';
+import { recordLogs } from '../aggregateCache.js';
 
 // Coalesces concurrent POST /logs requests' already-validated rows into
 // fewer, larger INSERTs.
@@ -62,6 +63,10 @@ function flush(): void {
 
   insertLogsRaw(allLogs)
     .then(() => {
+      // Only count rows toward the in-memory aggregate cache once they're
+      // confirmed durably written -- same discipline as resolving each
+      // request's promise below, never before.
+      recordLogs(allLogs);
       for (const req of batch) req.resolve(req.logs.length);
     })
     .catch((err: unknown) => {

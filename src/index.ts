@@ -14,7 +14,15 @@ import { primeAggregateCacheFromDb } from "./db/aggregateCache.js";
 const app = express();
 const PORT = config.api?.port || 8080;
 
-app.use(express.json({ limit: "10mb" }));
+// Measured actual request bodies: ~8.7KB for a 50-log local batch, ~5.7KB
+// for the portal's own average (~33 logs/request) -- the previous 10mb
+// limit was ~1,200x larger than anything ever actually sent. express.json
+// buffers the whole body into memory and runs JSON.parse synchronously,
+// blocking the event loop -- on a 0.5 CPU/256MB container, a request
+// anywhere near a multi-MB limit could stall every other concurrent
+// request, including the coalescing flush timer. 1mb keeps ~115x headroom
+// over the largest body observed while cutting that exposure by 10x.
+app.use(express.json({ limit: "1mb" }));
 app.use(logNonOkResponses);
 
 app.get("/health", healthHandler);

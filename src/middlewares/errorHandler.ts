@@ -37,11 +37,15 @@ export class TooManyRequestsError extends Error {
   }
 }
 
+// The 4-argument signature is required for Express to recognize this as
+// error-handling middleware -- it dispatches purely on function arity, not
+// parameter names, so `_next` stays in the signature even though every
+// branch below returns a response directly and never calls it.
 export function errorHandler(
   err: Error,
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ) {
   if (err instanceof BadRequestError) {
     return res.status(400).json({ error: err.message });
@@ -65,6 +69,10 @@ export function errorHandler(
 
   if (err instanceof SyntaxError && "status" in err && err.status === 400) {
     return res.status(400).json({ error: "Malformed JSON payload" });
+  }
+
+  if ("type" in err && (err as any).type === "entity.too.large") {
+    return res.status(413).json({ error: "Request body exceeds the maximum allowed size" });
   }
 
   console.error("[Unhandled Error]:", err);

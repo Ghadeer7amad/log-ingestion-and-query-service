@@ -1,29 +1,28 @@
 import { writeClient } from '../index.js';
-import { ValidatedLog } from '../../validators/ingest.js';
+
+export interface InsertBatch {
+  timestamps: string[];
+  levels: string[];
+  services: string[];
+  messages: string[];
+  attributesJson: string[];
+}
 
 // Single INSERT for whatever batch of rows it's given -- no internal
 // chunking. Called only from ingestQueue.ts's flush(), which already caps
 // how large a single call ever gets (FLUSH_ROW_THRESHOLD), so splitting
 // further here would just turn one coalesced write back into several,
 // undoing the point of coalescing.
-export async function insertLogsRaw(validLogs: ValidatedLog[]): Promise<number> {
-  if (validLogs.length === 0) return 0;
-
-  const len = validLogs.length;
-  const timestamps = new Array(len);
-  const levels = new Array(len);
-  const services = new Array(len);
-  const messages = new Array(len);
-  const attributesList = new Array(len);
-
-  for (let j = 0; j < len; j++) {
-    const log = validLogs[j];
-    timestamps[j] = log.timestamp.toISOString();
-    levels[j] = log.level;
-    services[j] = log.service;
-    messages[j] = log.message;
-    attributesList[j] = JSON.stringify(log.attributes || {});
-  }
+//
+// Takes the already-built parallel arrays directly -- validation
+// (validators/ingest.ts) writes straight into this shape, so there's no
+// per-row loop left to do here at all. This used to re-derive these same
+// arrays from a `ValidatedLog[]` (calling `.toISOString()` and
+// `JSON.stringify()` again on data that had just been converted from those
+// exact representations one function earlier); removing that redundant
+// pass was the point of the fusion, not just moving it here.
+export async function insertLogsRaw(batch: InsertBatch): Promise<number> {
+  if (batch.timestamps.length === 0) return 0;
 
   const result = await writeClient`
     INSERT INTO logs (timestamp, level, service, message, attributes)
@@ -34,11 +33,11 @@ export async function insertLogsRaw(validLogs: ValidatedLog[]): Promise<number> 
       t.message,
       t.attributes::jsonb
     FROM UNNEST(
-      ${timestamps}::text[],
-      ${levels}::text[],
-      ${services}::text[],
-      ${messages}::text[],
-      ${attributesList}::jsonb[]
+      ${batch.timestamps}::text[],
+      ${batch.levels}::text[],
+      ${batch.services}::text[],
+      ${batch.messages}::text[],
+      ${batch.attributesJson}::jsonb[]
     ) AS t(timestamp, level, service, message, attributes)
   `;
 

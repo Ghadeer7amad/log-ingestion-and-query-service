@@ -1,6 +1,5 @@
 import { readDb } from './index.js';
 import { sql } from 'drizzle-orm';
-import { ValidatedLog } from '../validators/ingest.js';
 
 // In-memory replacement for the read side of GET /logs/aggregate, for the
 // common case: no `q` and no `attr.<key>` filter (exactly what the load
@@ -46,12 +45,12 @@ export function __resetForTesting(): void {
   buckets = new Map();
 }
 
-function minuteKeyOf(timestamp: Date): number {
-  return Math.floor(timestamp.getTime() / MINUTE_MS) * MINUTE_MS;
+function minuteKeyOf(epochMs: number): number {
+  return Math.floor(epochMs / MINUTE_MS) * MINUTE_MS;
 }
 
-function addToBucket(minuteStart: Date, service: string, level: string, delta: number): void {
-  const key = minuteKeyOf(minuteStart);
+function addToBucket(epochMs: number, service: string, level: string, delta: number): void {
+  const key = minuteKeyOf(epochMs);
   let bucket = buckets.get(key);
   if (!bucket) {
     bucket = { counts: new Map() };
@@ -65,14 +64,21 @@ function addToBucket(minuteStart: Date, service: string, level: string, delta: n
   levelCounts.set(level, (levelCounts.get(level) ?? 0) + delta);
 }
 
-export function recordLogs(logs: ValidatedLog[]): void {
-  for (const log of logs) {
-    addToBucket(log.timestamp, log.service, log.level, 1);
+// Takes parallel arrays (epoch ms, service, level), not objects -- callers
+// (ingestQueue.ts's flush()) already have these as arrays from validation,
+// which no longer constructs a Date anywhere in the ingest hot path. Taking
+// epoch numbers here instead of Date objects means this hottest, most
+// frequent function in the app allocates nothing per call beyond what the
+// Map/Map nesting already needs the first time a given minute/service/level
+// combination is seen.
+export function recordLogs(count: number, timestampEpochs: number[], services: string[], levels: string[]): void {
+  for (let i = 0; i < count; i++) {
+    addToBucket(timestampEpochs[i], services[i], levels[i], 1);
   }
 }
 
 export function pruneBucketsOlderThan(cutoff: Date): void {
-  const cutoffKey = minuteKeyOf(cutoff);
+  const cutoffKey = minuteKeyOf(cutoff.getTime());
   for (const key of buckets.keys()) {
     if (key < cutoffKey) buckets.delete(key);
   }
@@ -91,7 +97,7 @@ export async function primeAggregateCacheFromDb(retentionDays: number): Promise<
     GROUP BY 1, 2, 3
   `);
   for (const row of rows) {
-    addToBucket(new Date(row.bucket_start), row.service, row.level, Number(row.count));
+    addToBucket(new Date(row.bucket_start).getTime(), row.service, row.level, Number(row.count));
   }
 }
 

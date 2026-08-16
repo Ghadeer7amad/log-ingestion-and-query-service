@@ -1,16 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { recordLogs, queryAggregateCache, pruneBucketsOlderThan, __resetForTesting } from './aggregateCache.js';
-import type { ValidatedLog } from '../validators/ingest.js';
 
-function log(overrides: Partial<ValidatedLog>): ValidatedLog {
-  return {
-    timestamp: new Date('2026-08-15T10:00:00.000Z'),
-    level: 'error',
-    service: 'checkout',
-    message: 'm',
-    attributes: {},
-    ...overrides,
-  };
+// recordLogs now takes parallel arrays (epoch ms, service, level), not
+// objects -- this helper keeps tests reading like a list of log overrides
+// while building the arrays underneath.
+function record(logs: Array<{ timestamp?: Date; service?: string; level?: string }>): void {
+  const defaults = { timestamp: new Date('2026-08-15T10:00:00.000Z'), service: 'checkout', level: 'error' };
+  const merged = logs.map((o) => ({ ...defaults, ...o }));
+  recordLogs(
+    merged.length,
+    merged.map((l) => l.timestamp.getTime()),
+    merged.map((l) => l.service),
+    merged.map((l) => l.level)
+  );
 }
 
 beforeEach(() => {
@@ -28,10 +30,10 @@ describe('aggregateCache', () => {
   });
 
   it('counts logs correctly with no group_by (total per bucket, group null)', () => {
-    recordLogs([
-      log({ service: 'checkout', level: 'error' }),
-      log({ service: 'auth', level: 'info' }),
-      log({ service: 'auth', level: 'info' }),
+    record([
+      { service: 'checkout', level: 'error' },
+      { service: 'auth', level: 'info' },
+      { service: 'auth', level: 'info' },
     ]);
 
     const result = queryAggregateCache({
@@ -46,10 +48,10 @@ describe('aggregateCache', () => {
   });
 
   it('groups by service correctly', () => {
-    recordLogs([
-      log({ service: 'checkout' }),
-      log({ service: 'checkout' }),
-      log({ service: 'auth' }),
+    record([
+      { service: 'checkout' },
+      { service: 'checkout' },
+      { service: 'auth' },
     ]);
 
     const result = queryAggregateCache({
@@ -64,10 +66,10 @@ describe('aggregateCache', () => {
   });
 
   it('groups by level correctly', () => {
-    recordLogs([
-      log({ level: 'error' }),
-      log({ level: 'error' }),
-      log({ level: 'warn' }),
+    record([
+      { level: 'error' },
+      { level: 'error' },
+      { level: 'warn' },
     ]);
 
     const result = queryAggregateCache({
@@ -82,7 +84,7 @@ describe('aggregateCache', () => {
   });
 
   it('filters by service', () => {
-    recordLogs([log({ service: 'checkout' }), log({ service: 'auth' })]);
+    record([{ service: 'checkout' }, { service: 'auth' }]);
 
     const result = queryAggregateCache({
       since: new Date('2026-08-15T09:00:00.000Z'),
@@ -97,7 +99,7 @@ describe('aggregateCache', () => {
   });
 
   it('filters by level', () => {
-    recordLogs([log({ level: 'error' }), log({ level: 'warn' })]);
+    record([{ level: 'error' }, { level: 'warn' }]);
 
     const result = queryAggregateCache({
       since: new Date('2026-08-15T09:00:00.000Z'),
@@ -112,11 +114,11 @@ describe('aggregateCache', () => {
   });
 
   it('excludes logs outside the [since, until) range -- since inclusive, until exclusive', () => {
-    recordLogs([
-      log({ timestamp: new Date('2026-08-15T09:59:00.000Z') }), // just before window
-      log({ timestamp: new Date('2026-08-15T10:00:00.000Z') }), // exactly at since (inclusive)
-      log({ timestamp: new Date('2026-08-15T10:59:00.000Z') }), // inside window
-      log({ timestamp: new Date('2026-08-15T11:00:00.000Z') }), // exactly at until (exclusive)
+    record([
+      { timestamp: new Date('2026-08-15T09:59:00.000Z') }, // just before window
+      { timestamp: new Date('2026-08-15T10:00:00.000Z') }, // exactly at since (inclusive)
+      { timestamp: new Date('2026-08-15T10:59:00.000Z') }, // inside window
+      { timestamp: new Date('2026-08-15T11:00:00.000Z') }, // exactly at until (exclusive)
     ]);
 
     const result = queryAggregateCache({
@@ -130,10 +132,10 @@ describe('aggregateCache', () => {
   });
 
   it('re-buckets correctly into 5m/1h/1d without double counting or losing rows', () => {
-    recordLogs([
-      log({ timestamp: new Date('2026-08-15T10:02:00.000Z') }),
-      log({ timestamp: new Date('2026-08-15T10:04:00.000Z') }),
-      log({ timestamp: new Date('2026-08-15T10:07:00.000Z') }),
+    record([
+      { timestamp: new Date('2026-08-15T10:02:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:04:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:07:00.000Z') },
     ]);
 
     const fiveMin = queryAggregateCache({
@@ -156,10 +158,10 @@ describe('aggregateCache', () => {
   });
 
   it('results are sorted by bucket start ascending', () => {
-    recordLogs([
-      log({ timestamp: new Date('2026-08-15T12:00:00.000Z') }),
-      log({ timestamp: new Date('2026-08-15T10:00:00.000Z') }),
-      log({ timestamp: new Date('2026-08-15T11:00:00.000Z') }),
+    record([
+      { timestamp: new Date('2026-08-15T12:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T11:00:00.000Z') },
     ]);
 
     const result = queryAggregateCache({
@@ -173,9 +175,9 @@ describe('aggregateCache', () => {
   });
 
   it('pruneBucketsOlderThan removes only buckets before the cutoff', () => {
-    recordLogs([
-      log({ timestamp: new Date('2026-07-01T00:00:00.000Z') }), // old
-      log({ timestamp: new Date('2026-08-15T10:00:00.000Z') }), // recent
+    record([
+      { timestamp: new Date('2026-07-01T00:00:00.000Z') }, // old
+      { timestamp: new Date('2026-08-15T10:00:00.000Z') }, // recent
     ]);
 
     pruneBucketsOlderThan(new Date('2026-08-01T00:00:00.000Z'));
@@ -187,5 +189,15 @@ describe('aggregateCache', () => {
     });
 
     expect(result.reduce((s, r) => s + r.count, 0)).toBe(1);
+  });
+
+  it('recordLogs with count=0 is a no-op', () => {
+    recordLogs(0, [], [], []);
+    const result = queryAggregateCache({
+      since: new Date('2026-01-01T00:00:00.000Z'),
+      until: new Date('2026-12-31T00:00:00.000Z'),
+      bucket: '1d',
+    });
+    expect(result).toEqual([]);
   });
 });

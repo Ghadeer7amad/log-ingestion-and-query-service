@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateAndTransformLog } from './ingest.js';
+import { validateLogBatch } from './ingest.js';
 
 const validEntry = () => ({
   timestamp: new Date().toISOString(),
@@ -9,20 +9,34 @@ const validEntry = () => ({
   attributes: { user_id: '42', retries: 3, active: true },
 });
 
-describe('validateAndTransformLog', () => {
+// Single-entry helper over the batch API -- validateLogBatch is the only
+// exported entry point now (validation writes straight into the batch's
+// parallel arrays instead of returning a per-entry object), so tests drive
+// it with a one-element array and inspect index 0.
+function validateOne(entry: unknown) {
+  const { batch, rejected } = validateLogBatch([entry]);
+  return {
+    error: rejected[0]?.reason ?? null,
+    accepted: batch.count === 1,
+    batch,
+  };
+}
+
+describe('validateLogBatch', () => {
   it('accepts a fully valid entry', () => {
-    const { error, data } = validateAndTransformLog(validEntry());
+    const { error, accepted, batch } = validateOne(validEntry());
     expect(error).toBeNull();
-    expect(data?.service).toBe('checkout');
-    expect(data?.attributes).toEqual({ user_id: '42', retries: 3, active: true });
+    expect(accepted).toBe(true);
+    expect(batch.services[0]).toBe('checkout');
+    expect(JSON.parse(batch.attributesJson[0])).toEqual({ user_id: '42', retries: 3, active: true });
   });
 
   it('accepts an entry with no attributes at all', () => {
     const entry = validEntry();
     delete (entry as any).attributes;
-    const { error, data } = validateAndTransformLog(entry);
+    const { error, batch } = validateOne(entry);
     expect(error).toBeNull();
-    expect(data?.attributes).toEqual({});
+    expect(JSON.parse(batch.attributesJson[0])).toEqual({});
   });
 
   it.each([
@@ -30,62 +44,69 @@ describe('validateAndTransformLog', () => {
     ['array entry', ['nope']],
     ['null entry', null],
   ])('rejects %s', (_name, bad) => {
-    const { error, data } = validateAndTransformLog(bad);
+    const { error, accepted } = validateOne(bad);
     expect(error).not.toBeNull();
-    expect(data).toBeNull();
+    expect(accepted).toBe(false);
   });
 
   it('rejects a missing timestamp', () => {
     const entry = validEntry();
     delete (entry as any).timestamp;
-    const { error } = validateAndTransformLog(entry);
+    const { error } = validateOne(entry);
     expect(error).toMatch(/timestamp/);
   });
 
   it('rejects an unparseable timestamp', () => {
-    const { error } = validateAndTransformLog({ ...validEntry(), timestamp: 'not-a-date' });
+    const { error } = validateOne({ ...validEntry(), timestamp: 'not-a-date' });
     expect(error).toMatch(/ISO 8601/);
   });
 
   it('rejects a timestamp more than 5 minutes in the future', () => {
     const future = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    const { error } = validateAndTransformLog({ ...validEntry(), timestamp: future });
+    const { error } = validateOne({ ...validEntry(), timestamp: future });
     expect(error).toMatch(/future/);
   });
 
   it('accepts a timestamp just under 5 minutes in the future', () => {
     const nearFuture = new Date(Date.now() + 4 * 60 * 1000).toISOString();
-    const { error } = validateAndTransformLog({ ...validEntry(), timestamp: nearFuture });
+    const { error } = validateOne({ ...validEntry(), timestamp: nearFuture });
     expect(error).toBeNull();
   });
 
+  it('stores the timestamp as a canonical ISO string, and its epoch in parallel', () => {
+    const t = new Date('2026-08-15T10:00:00.000Z').toISOString();
+    const { batch } = validateOne({ ...validEntry(), timestamp: t });
+    expect(batch.timestamps[0]).toBe(t);
+    expect(batch.timestampEpochs[0]).toBe(Date.parse(t));
+  });
+
   it('rejects an invalid level', () => {
-    const { error } = validateAndTransformLog({ ...validEntry(), level: 'critical' });
+    const { error } = validateOne({ ...validEntry(), level: 'critical' });
     expect(error).toBe("invalid level: 'critical'");
   });
 
   it.each(['debug', 'info', 'warn', 'error'])('accepts level "%s"', (level) => {
-    const { error } = validateAndTransformLog({ ...validEntry(), level });
+    const { error } = validateOne({ ...validEntry(), level });
     expect(error).toBeNull();
   });
 
   it('rejects an empty service string', () => {
-    const { error } = validateAndTransformLog({ ...validEntry(), service: '   ' });
+    const { error } = validateOne({ ...validEntry(), service: '   ' });
     expect(error).toMatch(/service/);
   });
 
   it('rejects an empty message string', () => {
-    const { error } = validateAndTransformLog({ ...validEntry(), message: '' });
+    const { error } = validateOne({ ...validEntry(), message: '' });
     expect(error).toMatch(/message/);
   });
 
   it('rejects attributes that are not a flat object (array)', () => {
-    const { error } = validateAndTransformLog({ ...validEntry(), attributes: ['nope'] });
+    const { error } = validateOne({ ...validEntry(), attributes: ['nope'] });
     expect(error).toMatch(/flat object/);
   });
 
   it('rejects a nested object inside attributes', () => {
-    const { error } = validateAndTransformLog({
+    const { error } = validateOne({
       ...validEntry(),
       attributes: { region: { nested: true } },
     });
@@ -93,7 +114,7 @@ describe('validateAndTransformLog', () => {
   });
 
   it('rejects an array value inside attributes', () => {
-    const { error } = validateAndTransformLog({
+    const { error } = validateOne({
       ...validEntry(),
       attributes: { tags: ['a', 'b'] },
     });
@@ -101,22 +122,42 @@ describe('validateAndTransformLog', () => {
   });
 
   it('silently drops null/undefined attribute values rather than rejecting', () => {
-    const { error, data } = validateAndTransformLog({
+    const { error, batch } = validateOne({
       ...validEntry(),
       attributes: { user_id: '42', ignored: null },
     });
     expect(error).toBeNull();
-    expect(data?.attributes).toEqual({ user_id: '42' });
+    expect(JSON.parse(batch.attributesJson[0])).toEqual({ user_id: '42' });
   });
 
   it('preserves numeric and boolean attribute types (not stringified)', () => {
-    const { data } = validateAndTransformLog({
+    const { batch } = validateOne({
       ...validEntry(),
       attributes: { retries: 3, active: false },
     });
-    expect(data?.attributes.retries).toBe(3);
-    expect(typeof data?.attributes.retries).toBe('number');
-    expect(data?.attributes.active).toBe(false);
-    expect(typeof data?.attributes.active).toBe('boolean');
+    const attrs = JSON.parse(batch.attributesJson[0]);
+    expect(attrs.retries).toBe(3);
+    expect(typeof attrs.retries).toBe('number');
+    expect(attrs.active).toBe(false);
+    expect(typeof attrs.active).toBe('boolean');
+  });
+
+  it('escapes special characters in attribute keys/values correctly', () => {
+    const { batch } = validateOne({
+      ...validEntry(),
+      attributes: { 'weird "key"': 'value with "quotes" and \\backslash\\ and \nnewline' },
+    });
+    const attrs = JSON.parse(batch.attributesJson[0]);
+    expect(attrs['weird "key"']).toBe('value with "quotes" and \\backslash\\ and \nnewline');
+  });
+
+  it('handles a batch with a mix of accepted and rejected entries, preserving indices', () => {
+    const { batch, rejected } = validateLogBatch([
+      validEntry(),
+      { ...validEntry(), level: 'bogus' },
+      validEntry(),
+    ]);
+    expect(batch.count).toBe(2);
+    expect(rejected).toEqual([{ index: 1, reason: "invalid level: 'bogus'" }]);
   });
 });

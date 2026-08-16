@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { validateAndTransformLog, ValidatedLog } from '../validators/ingest.js';
+import { validateLogBatch } from '../validators/ingest.js';
 import { enqueueLogsForInsert } from '../db/queries/ingestQueue.js';
 import { BadRequestError } from '../middlewares/errorHandler.js';
 
@@ -14,19 +14,9 @@ export const ingestLogsHandler = async (req: Request, res: Response, next: NextF
       throw new BadRequestError("logs array must contain at least one log entry");
     }
 
-    const validLogs: ValidatedLog[] = [];
-    const rejected: Array<{ index: number; reason: string }> = [];
+    const { batch, rejected } = validateLogBatch(rawLogs);
 
-    for (let i = 0; i < rawLogs.length; i++) {
-      const { error, data } = validateAndTransformLog(rawLogs[i]);
-      if (error) {
-        rejected.push({ index: i, reason: error });
-      } else if (data) {
-        validLogs.push(data);
-      }
-    }
-
-    if (validLogs.length === 0) {
+    if (batch.count === 0) {
       res.status(400).json({
         accepted: 0,
         rejected
@@ -34,7 +24,7 @@ export const ingestLogsHandler = async (req: Request, res: Response, next: NextF
       return;
     }
 
-    const acceptedCount = await enqueueLogsForInsert(validLogs);
+    const acceptedCount = await enqueueLogsForInsert(batch);
 
     res.status(200).json({
       accepted: acceptedCount,

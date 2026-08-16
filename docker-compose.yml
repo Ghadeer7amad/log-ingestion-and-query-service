@@ -37,6 +37,20 @@ services:
 
   app:
     build: .
+    # --max-old-space-size=190 (~75% of the 256MB container limit): V8's
+    # default heap_size_limit resolved to ~259MB with no flag set --
+    # essentially the entire container budget, leaving no headroom for
+    # non-heap memory (stack, buffers, native postgres.js/libuv state). A
+    # correctness/OOM-safety fix, not a performance bet, verified via
+    # `require('v8').getHeapStatistics()` on the running process before
+    # and after. --max-semi-space-size was also tried (bigger young
+    # generation, theory: fewer minor GCs) and dropped: measured via
+    # --prof under the same load, it made GC *worse* (26.8% of ticks vs
+    # 22.5% without it) -- likely each scavenge got more expensive to scan
+    # faster than it got rarer for this workload's allocation pattern.
+    # Not shipped on the strength of a plausible theory that measured
+    # backwards.
+    command: ["node", "--max-old-space-size=190", "dist/index.js"]
     ports:
       - "8080:8080"
     environment:

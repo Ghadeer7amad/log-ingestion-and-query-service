@@ -1,5 +1,5 @@
 import { insertLogsRaw } from './logs.js';
-import { ValidatedLog } from '../../validators/ingest.js';
+import { ValidatedBatch } from '../../validators/ingest.js';
 import { recordLogs } from '../aggregateCache.js';
 import { TooManyRequestsError } from '../../middlewares/errorHandler.js';
 
@@ -19,7 +19,7 @@ import { TooManyRequestsError } from '../../middlewares/errorHandler.js';
 // is never returned for a batch that wasn't durably inserted.
 
 interface PendingRequest {
-  logs: ValidatedLog[];
+  batch: ValidatedBatch;
   resolve: (acceptedCount: number) => void;
   reject: (err: Error) => void;
 }
@@ -56,14 +56,14 @@ let bufferedRowCount = 0;
 let outstandingRowCount = 0;
 let flushTimer: NodeJS.Timeout | null = null;
 
-export function enqueueLogsForInsert(validLogs: ValidatedLog[]): Promise<number> {
+export function enqueueLogsForInsert(batch: ValidatedBatch): Promise<number> {
   return new Promise((resolve, reject) => {
-    if (validLogs.length === 0) {
+    if (batch.count === 0) {
       resolve(0);
       return;
     }
 
-    if (outstandingRowCount + validLogs.length > MAX_OUTSTANDING_ROWS) {
+    if (outstandingRowCount + batch.count > MAX_OUTSTANDING_ROWS) {
       reject(
         new TooManyRequestsError(
           'Server is overloaded -- write queue is backed up beyond capacity. Retry shortly.',
@@ -73,9 +73,9 @@ export function enqueueLogsForInsert(validLogs: ValidatedLog[]): Promise<number>
       return;
     }
 
-    outstandingRowCount += validLogs.length;
-    buffer.push({ logs: validLogs, resolve, reject });
-    bufferedRowCount += validLogs.length;
+    outstandingRowCount += batch.count;
+    buffer.push({ batch, resolve, reject });
+    bufferedRowCount += batch.count;
 
     if (bufferedRowCount >= FLUSH_ROW_THRESHOLD) {
       flush();
@@ -92,25 +92,47 @@ function flush(): void {
   }
   if (buffer.length === 0) return;
 
-  const batch = buffer;
+  const pending = buffer;
   buffer = [];
   bufferedRowCount = 0;
 
-  const allLogs = batch.flatMap((req) => req.logs);
+  // Merge every pending request's already-built arrays into one combined
+  // set for the coalesced INSERT. This is array concatenation of strings
+  // and numbers, not object allocation -- coalescing many requests into
+  // one flush still costs almost nothing extra here, which is the whole
+  // point: validation already did the only per-log work that matters.
+  const timestamps: string[] = [];
+  const timestampEpochs: number[] = [];
+  const levels: string[] = [];
+  const services: string[] = [];
+  const messages: string[] = [];
+  const attributesJson: string[] = [];
+  let totalCount = 0;
 
-  insertLogsRaw(allLogs)
+  for (const req of pending) {
+    const b = req.batch;
+    timestamps.push(...b.timestamps);
+    timestampEpochs.push(...b.timestampEpochs);
+    levels.push(...b.levels);
+    services.push(...b.services);
+    messages.push(...b.messages);
+    attributesJson.push(...b.attributesJson);
+    totalCount += b.count;
+  }
+
+  insertLogsRaw({ timestamps, levels, services, messages, attributesJson })
     .then(() => {
       // Only count rows toward the in-memory aggregate cache once they're
       // confirmed durably written -- same discipline as resolving each
       // request's promise below, never before.
-      recordLogs(allLogs);
-      for (const req of batch) req.resolve(req.logs.length);
+      recordLogs(totalCount, timestampEpochs, services, levels);
+      for (const req of pending) req.resolve(req.batch.count);
     })
     .catch((err: unknown) => {
       const error = err instanceof Error ? err : new Error(String(err));
-      for (const req of batch) req.reject(error);
+      for (const req of pending) req.reject(error);
     })
     .finally(() => {
-      outstandingRowCount -= allLogs.length;
+      outstandingRowCount -= totalCount;
     });
 }

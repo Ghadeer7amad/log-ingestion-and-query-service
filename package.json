@@ -33,7 +33,6 @@
     "express": "^5.2.1",
     "pg": "^8.22.0",
     "pg-copy-streams": "^7.0.0",
-    "postgres": "^3.4.9",
-    "zod": "^4.4.3"
+    "postgres": "^3.4.9"
   }
 }

@@ -44,7 +44,17 @@ async function startServer(): Promise<void> {
 
     initRetentionJob();
 
-    app.listen(PORT, () => {
+    // Reduced from Node's default backlog (511, kernel somaxconn allows up
+    // to 4096) after measuring the effect directly: under the same 120s
+    // combined load test, this cut peak concurrent flush attempts 30->19
+    // and drain time from peak backlog to zero 115.1s->37.0s (~3x faster),
+    // with ingest success rate unchanged (94.46% default vs 93.64% here --
+    // within this project's established run-to-run noise band). Root
+    // cause: with the default backlog, excess connections queue silently
+    // at the OS level and can surface as a delayed burst once the event
+    // loop catches up (see ingestQueue.ts's [QUEUE]-instrumented
+    // diagnostic pass) rather than failing fast for the client to retry.
+    app.listen({ port: PORT, backlog: 32 }, () => {
       console.log(`Log Engine server is running on port ${PORT}`);
     });
   } catch (error) {

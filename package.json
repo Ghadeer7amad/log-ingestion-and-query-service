@@ -7,7 +7,7 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
-    "lint": "eslint src",
+    "lint": "eslint src tests",
     "generate": "drizzle-kit generate",
     "migrate": "drizzle-kit migrate"
   },

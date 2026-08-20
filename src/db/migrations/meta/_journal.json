@@ -36,6 +36,13 @@
       "when": 1786904400000,
       "tag": "0004_full_durability",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787020800000,
+      "tag": "0005_gin_pending_list_limit",
+      "breakpoints": true
     }
   ]
 }

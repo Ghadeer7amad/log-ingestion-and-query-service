@@ -11,10 +11,6 @@ export const logs = pgTable('logs', {
     .$type<Record<string, string | number | boolean>>()
     .default({})
     .notNull(),
-  // Every attribute value stringified (number/boolean/string alike), so
-  // attr.<key> containment filters -- whose values always arrive as plain
-  // strings from the query string -- match regardless of the original
-  // stored type. Populated by Postgres on write; the app never writes to it.
   attributesSearch: jsonb('attributes_search')
     .$type<Record<string, string>>()
     .generatedAlwaysAs(sql`jsonb_stringify_values(attributes)`),

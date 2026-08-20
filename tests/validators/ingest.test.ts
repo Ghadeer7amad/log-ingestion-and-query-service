@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateLogBatch } from './ingest.js';
+import { validateLogBatch } from '../../src/validators/ingest.js';
 
 const validEntry = () => ({
   timestamp: new Date().toISOString(),
@@ -9,10 +9,6 @@ const validEntry = () => ({
   attributes: { user_id: '42', retries: 3, active: true },
 });
 
-// Single-entry helper over the batch API -- validateLogBatch is the only
-// exported entry point now (validation writes straight into the batch's
-// parallel arrays instead of returning a per-entry object), so tests drive
-// it with a one-element array and inspect index 0.
 function validateOne(entry: unknown) {
   const { batch, rejected } = validateLogBatch([entry]);
   return {

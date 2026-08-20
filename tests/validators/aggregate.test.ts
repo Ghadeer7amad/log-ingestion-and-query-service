@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { validateAggregateQuery } from './aggregate.js';
+import { validateAggregateQuery } from '../../src/validators/aggregate.js';
 
 function fakeReqRes(query: Record<string, any>) {
   const json = vi.fn();

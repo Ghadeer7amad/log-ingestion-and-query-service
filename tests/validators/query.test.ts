@@ -1,9 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { validateGetLogsQuery } from './query.js';
+import { validateGetLogsQuery } from '../../src/validators/query.js';
 
-// validateGetLogsQuery writes 400 responses directly to `res` rather than
-// throwing/returning an error object, so tests need a minimal fake
-// Request/Response rather than calling the function purely.
 function fakeReqRes(query: Record<string, any>) {
   const json = vi.fn();
   const status = vi.fn().mockReturnValue({ json });

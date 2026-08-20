@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { recordLogs, queryAggregateCache, pruneBucketsOlderThan, __resetForTesting } from './aggregateCache.js';
+import { recordLogs, queryAggregateCache, pruneBucketsOlderThan, __resetForTesting } from '../../src/db/aggregateCache.js';
 
-// recordLogs now takes parallel arrays (epoch ms, service, level), not
-// objects -- this helper keeps tests reading like a list of log overrides
-// while building the arrays underneath.
 function record(logs: Array<{ timestamp?: Date; service?: string; level?: string }>): void {
   const defaults = { timestamp: new Date('2026-08-15T10:00:00.000Z'), service: 'checkout', level: 'error' };
   const merged = logs.map((o) => ({ ...defaults, ...o }));
@@ -115,10 +112,10 @@ describe('aggregateCache', () => {
 
   it('excludes logs outside the [since, until) range -- since inclusive, until exclusive', () => {
     record([
-      { timestamp: new Date('2026-08-15T09:59:00.000Z') }, // just before window
-      { timestamp: new Date('2026-08-15T10:00:00.000Z') }, // exactly at since (inclusive)
-      { timestamp: new Date('2026-08-15T10:59:00.000Z') }, // inside window
-      { timestamp: new Date('2026-08-15T11:00:00.000Z') }, // exactly at until (exclusive)
+      { timestamp: new Date('2026-08-15T09:59:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:59:00.000Z') },
+      { timestamp: new Date('2026-08-15T11:00:00.000Z') },
     ]);
 
     const result = queryAggregateCache({
@@ -128,7 +125,7 @@ describe('aggregateCache', () => {
     });
 
     const total = result.reduce((sum, r) => sum + r.count, 0);
-    expect(total).toBe(2); // the 10:00:00 and 10:59:00 entries only
+    expect(total).toBe(2);
   });
 
   it('re-buckets correctly into 5m/1h/1d without double counting or losing rows', () => {
@@ -176,8 +173,8 @@ describe('aggregateCache', () => {
 
   it('pruneBucketsOlderThan removes only buckets before the cutoff', () => {
     record([
-      { timestamp: new Date('2026-07-01T00:00:00.000Z') }, // old
-      { timestamp: new Date('2026-08-15T10:00:00.000Z') }, // recent
+      { timestamp: new Date('2026-07-01T00:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:00:00.000Z') },
     ]);
 
     pruneBucketsOlderThan(new Date('2026-08-01T00:00:00.000Z'));
@@ -200,8 +197,6 @@ describe('aggregateCache', () => {
     });
     expect(result).toEqual([]);
   });
-
-  // --- Hierarchical rollups (hour/day maps used for '1h'/'1d' requests) ---
 
   it('1h bucket over a window aligned exactly to hour boundaries matches the minute-map answer', () => {
     record([
@@ -226,14 +221,13 @@ describe('aggregateCache', () => {
 
   it('1h bucket over a window with unaligned edges still counts every row exactly once', () => {
     record([
-      { timestamp: new Date('2026-08-15T09:50:00.000Z') }, // in the pre-edge sliver
-      { timestamp: new Date('2026-08-15T10:00:00.000Z') }, // first full aligned hour
-      { timestamp: new Date('2026-08-15T10:59:00.000Z') }, // still first full aligned hour
-      { timestamp: new Date('2026-08-15T11:00:00.000Z') }, // second full aligned hour
-      { timestamp: new Date('2026-08-15T12:10:00.000Z') }, // in the post-edge sliver
+      { timestamp: new Date('2026-08-15T09:50:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T10:59:00.000Z') },
+      { timestamp: new Date('2026-08-15T11:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T12:10:00.000Z') },
     ]);
 
-    // Window: 09:45 -> 12:20, i.e. neither edge lands on an hour boundary.
     const result = queryAggregateCache({
       since: new Date('2026-08-15T09:45:00.000Z'),
       until: new Date('2026-08-15T12:20:00.000Z'),
@@ -241,14 +235,14 @@ describe('aggregateCache', () => {
     });
 
     const total = result.reduce((s, r) => s + r.count, 0);
-    expect(total).toBe(5); // every row counted, none dropped, none doubled
+    expect(total).toBe(5);
 
     const byStart = Object.fromEntries(result.map((r) => [r.start.toISOString(), r.count]));
     expect(byStart).toEqual({
-      '2026-08-15T09:00:00.000Z': 1, // pre-edge sliver re-bucketed to its containing hour
-      '2026-08-15T10:00:00.000Z': 2, // full aligned hour, read from the hour map
-      '2026-08-15T11:00:00.000Z': 1, // full aligned hour, read from the hour map
-      '2026-08-15T12:00:00.000Z': 1, // post-edge sliver re-bucketed to its containing hour
+      '2026-08-15T09:00:00.000Z': 1,
+      '2026-08-15T10:00:00.000Z': 2,
+      '2026-08-15T11:00:00.000Z': 1,
+      '2026-08-15T12:00:00.000Z': 1,
     });
   });
 
@@ -290,7 +284,7 @@ describe('aggregateCache', () => {
     });
 
     const total = result.reduce((s, r) => s + r.count, 0);
-    expect(total).toBe(2); // the two auth/error rows only -- checkout and warn excluded
+    expect(total).toBe(2);
   });
 
   it('a window narrower than one hour still falls back to the minute map correctly', () => {
@@ -310,12 +304,11 @@ describe('aggregateCache', () => {
 
   it('pruneBucketsOlderThan only evicts hour/day buckets whose entire span is expired', () => {
     record([
-      { timestamp: new Date('2026-07-01T10:00:00.000Z') }, // wholly expired hour/day
-      { timestamp: new Date('2026-08-15T23:30:00.000Z') }, // hour/day bucket straddles the cutoff below
-      { timestamp: new Date('2026-08-16T10:00:00.000Z') }, // clearly still fresh
+      { timestamp: new Date('2026-07-01T10:00:00.000Z') },
+      { timestamp: new Date('2026-08-15T23:30:00.000Z') },
+      { timestamp: new Date('2026-08-16T10:00:00.000Z') },
     ]);
 
-    // Cutoff lands inside the 2026-08-15T23:00 hour / 2026-08-15 day bucket.
     pruneBucketsOlderThan(new Date('2026-08-15T23:45:00.000Z'));
 
     const dayResult = queryAggregateCache({
@@ -323,9 +316,6 @@ describe('aggregateCache', () => {
       until: new Date('2026-12-31T00:00:00.000Z'),
       bucket: '1d',
     });
-    // The wholly-expired 2026-07-01 row is gone; the straddling bucket (with
-    // its one row) and the fresh row both remain -- straddling buckets are
-    // never partially trimmed, only ever evicted once entirely expired.
     expect(dayResult.reduce((s, r) => s + r.count, 0)).toBe(2);
   });
 });

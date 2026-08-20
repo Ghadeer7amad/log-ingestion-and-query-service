@@ -2,6 +2,12 @@
 
 High-throughput log ingestion, querying, and aggregation service — Node.js, TypeScript, Express, PostgreSQL. A simplified Datadog/Loki-style backend: batched ingestion, filterable/paginated queries, time-bucketed aggregation, configurable retention.
 
+**Key highlights:**
+- Write-coalescing queue + COPY ingestion pipeline, event-loop yielding to keep concurrent reads unblocked under load
+- Full durability throughout (`fsync`/`synchronous_commit` on) with three separate connection pools so writes never starve reads
+- `attributes_search` generated column solves JSONB's type-mismatch problem for indexable `attr.<key>` filtering
+- In-memory aggregate cache bypasses Postgres for unfiltered reads, verified byte-exact against SQL ground truth
+
 Repository: https://github.com/Ghadeer7amad/log-ingestion-and-query-service
 
 ---
@@ -53,6 +59,7 @@ src/
   validators/                 → request validation
   db/schema.ts, migrate.ts, queries/  → schema, migrations, all SQL
   middlewares/                → error handling, logging
+tests/                        → mirrors src/, unit tests (vitest)
 ```
 
 middleware → handler (validate → query layer → shape response) → query layer (all SQL) → Postgres. Handlers never build SQL; query files never touch `req`/`res`.
@@ -145,17 +152,14 @@ Measured with the official grading tool directly (`npx github:Ahmad-Abbas-Foothi
 
 | State | Performance | Queries | Total | Mechanism → fix |
 |---|---|---|---|---|
-| **Baseline, pre-investigation** (×3 runs, before any of the code changes below) | 32.8-34.4/50 (13,343-14,555/s) | 6.6-13.4/15² | 74.4-82.8/100 | Starting point. Not yet beaten by anything tried since — see note below |
-| Weekly partitioning (reverted, never committed) | 1.5/50 | 14.1/15 | 50.7/100 | ~150 relations (30 partitions × 4 indexes) saturated Postgres's 1GB memory limit → escalating CPU throttling (23%→61%) → replaced with a BRIN index |
-| BRIN index | 27.8-31.4/50 | 6.0/15 | 68.8-72.4/100 | Ingestion healthy again, but `aggregate p95` came back `null` → `backlog: 32` was refusing the aggregate probe's connections once real traffic existed → raised to 128 |
-| + backlog 128 | 24.6/50¹ | 6.0-6.1/15 | 65.6/100¹ | Refusals confirmed gone (kernel `ListenOverflows`/`ListenDrops` = 0), but `aggregate p95` now 496-1548ms → COPY-text-build and flush-merge were unbroken sync loops blocking the event loop → chunked with `setImmediate` yields |
-| + event-loop yielding | — | 9.5-10.3/15 | — | `aggregate p95` 260-303ms, under the 500ms cutoff |
-| **Final tuned state** (BRIN + backlog=128, event-loop yielding, `gin_pending_list_limit`=64MB, `keepAliveTimeout`, chunk=500) — ×2 runs | 28.5-30.8/50 (10,110-11,814/s) | 7.9-9.1/15 | **71.4-74.9/100** | Both runs: severe generator CPU contention (k6 dropped 1,863-5,866 scheduled iterations per scenario) and low machine speed (0.25-0.34x) — a noisier host than most earlier rows |
+| **Baseline, pre-investigation** (×3 runs, before any of the code changes below) | 32.8-34.4/50 (13,343-14,555/s) | 6.6-13.4/15¹ | 74.4-82.8/100 | Starting point. Not yet beaten by anything tried since — see note below |
+| Partitioning → BRIN → backlog=128 (regression chain, each step reverted or superseded by the next) | 1.5-31.4/50 | 6.0-14.1/15 | 50.7-72.4/100 | Weekly partitioning (~150 relations, 30 partitions × 4 indexes) saturated Postgres's 1GB memory limit → escalating CPU throttling (23%→61%) → replaced with a BRIN index. Ingestion recovered, but `aggregate p95` came back `null` — `backlog: 32` was refusing the aggregate probe's connections once real traffic existed → raised to 128 (refusals confirmed gone via kernel `ListenOverflows`/`ListenDrops`=0, though this run's host was noisier than most, machine speed ~0.20x); `aggregate p95` still 496-1548ms — COPY-text-build and flush-merge were unbroken sync loops blocking the event loop |
+| + event-loop yielding, then **final tuned state** (BRIN + backlog=128 + yielding + `gin_pending_list_limit`=64MB + `keepAliveTimeout`, chunk=500) — ×2 runs | 28.5-30.8/50 (10,110-11,814/s) | 7.9-9.1/15 | **71.4-74.9/100** | Yielding alone (isolated test): `aggregate p95` dropped to 260-303ms, Queries 9.5-10.3/15, under the 500ms cutoff. Full config, both runs: severe generator CPU contention (k6 dropped 1,863-5,866 scheduled iterations per scenario) and low machine speed (0.25-0.34x) — a noisier host than most earlier rows |
 | **BRIN removed again** — backlog=128 + event-loop yielding + `gin_pending_list_limit` kept, applied on the *original* (pre-BRIN, pre-partitioning) schema | 27.9/50 (9,668/s) | 8.4/15 | **71.3/100** | Not a clear win over the BRIN runs (71.4-74.9) — but this run's host was noisier than any earlier row (machine speed 0.22x, 18,363 total dropped k6 iterations across all four scenarios), so it isn't a clean isolation of BRIN's effect either. Inconclusive, not negative. |
 | **Clean confirming runs, full host restart** — same config as above (no BRIN, backlog=128, event-loop yielding, `FLUSH_INTERVAL_MS`=12, `gin_pending_list_limit`=64MB) — ×3 | — | — | 79.7-83.0/100 | Low dropped-iteration counts, machine speed back near the baseline's own range. Per-metric breakdown not preserved for these three, Total is. |
 | Same configuration, re-confirmed same-day | 32.9/50 (13,439/s) | 11.7/15 | **79.6/100** | `aggregate p95` 182ms. Working tree diffed line-by-line against this exact configuration (Section 6/9 above) and confirmed identical before trusting this number. |
 
-¹ Noisier host (machine speed 0.20x reference) — not directly comparable to the other rows, but the finding held and matched an independent run at the same setting. ² Two runs measured 6.6/15 (agg p95 464-466ms); a third, same code and host, measured 13.4/15 (agg p95 88ms) — the aggregate probe was already borderline-inconsistent at baseline, right around the 500ms cutoff, before any of the changes below.
+¹ Two runs measured 6.6/15 (agg p95 464-466ms); a third, same code and host, measured 13.4/15 (agg p95 88ms) — the aggregate probe was already borderline-inconsistent at baseline, right around the 500ms cutoff, before any of the changes below.
 
 Correctness (15/15) and Reliability (20/20) maxed throughout, every row measured so far.
 

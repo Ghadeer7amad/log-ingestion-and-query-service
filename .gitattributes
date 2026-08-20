@@ -1,0 +1,9 @@
+# Force LF line endings for shell scripts regardless of the checking-out
+# platform's line-ending config (Windows checkouts otherwise convert LF ->
+# CRLF via core.autocrlf, which breaks bash execution -- a CRLF shebang
+# line fails as "bad interpreter: /bin/bash^M", and CRLF anywhere else in
+# the script can corrupt commands silently). No .sh files are tracked in
+# this repo as of this change; this is a forward-looking policy so any
+# script added later is never checked out with the wrong line endings.
+*.sh text eol=lf
+*.bash text eol=lf

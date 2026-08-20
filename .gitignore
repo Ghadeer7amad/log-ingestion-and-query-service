@@ -3,3 +3,16 @@ dist/
 .env
 *.log
 .claude/
+.load-generator.compose.override.yml
+
+# Local benchmark CLI JSON reports (--json <name>.json) -- never meant to
+# be committed, just scratch output from local/CLI verification runs.
+# Covers this project's actual naming so far (backlog-fix-test.json,
+# backlog128-monitored.json, benchmark-report.json, chunk250-test.json,
+# event-loop-fix-test.json) plus the same convention going forward.
+# None of these suffixes collide with a tracked file (package.json,
+# package-lock.json, tsconfig.json, src/db/migrations/meta/*.json).
+*-test.json
+*-monitored.json
+*-report.json
+benchmark.json

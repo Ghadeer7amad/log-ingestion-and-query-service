@@ -31,10 +31,6 @@ export class NotFoundError extends Error {
 
 
 export class TooManyRequestsError extends Error {
-  // Seconds the client should wait before retrying. Fixed, not computed from
-  // an actual queue-drain estimate -- current instrumentation (outstanding
-  // row count) doesn't give a reliable ETA, so a conservative constant is
-  // used instead of a precise-looking number that isn't actually precise.
   retryAfterSeconds: number;
 
   constructor(message: string, retryAfterSeconds: number = 2) {
@@ -44,10 +40,6 @@ export class TooManyRequestsError extends Error {
   }
 }
 
-// The 4-argument signature is required for Express to recognize this as
-// error-handling middleware -- it dispatches purely on function arity, not
-// parameter names, so `_next` stays in the signature even though every
-// branch below returns a response directly and never calls it.
 export function errorHandler(
   err: Error,
   req: Request,

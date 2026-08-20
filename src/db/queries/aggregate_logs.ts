@@ -29,9 +29,6 @@ function getBucketSql(bucket: string, column: SQLWrapper) {
   }
 }
 
-// Slow path: scans `logs` directly. Required whenever `q` (message
-// substring) or `attr.<key>` filters are present, since neither is tracked
-// by the in-memory aggregate cache.
 async function fetchAggregateFromRawLogs(params: AggregateParams) {
   const { service, level, since, until, bucket, group_by, q, attributes } = params;
 
@@ -45,11 +42,6 @@ async function fetchAggregateFromRawLogs(params: AggregateParams) {
   if (q) conditions.push(ilike(logs.message, `%${q}%`));
 
   if (attributes) {
-    // attr.<key> values always arrive as plain strings from the query
-    // string, so match against attributesSearch (every value stringified)
-    // instead of the raw `attributes` column -- otherwise numeric/boolean
-    // attribute values could never match (JSONB containment requires exact
-    // type equality).
     for (const [key, value] of Object.entries(attributes)) {
       conditions.push(sql`${logs.attributesSearch} @> ${JSON.stringify({ [key]: value })}::jsonb`);
     }
@@ -83,10 +75,6 @@ async function fetchAggregateFromRawLogs(params: AggregateParams) {
   return queryBuilder.orderBy(bucketSql);
 }
 
-// Fast path: served entirely from the in-memory aggregate cache, no
-// Postgres round trip at all -- see db/aggregateCache.ts for why. Only
-// valid when there's no `q`/`attr.<key>` filter, matching exactly what the
-// load generator's own aggregate probe sends.
 export async function fetchAggregateLogsFromDb(params: AggregateParams) {
   const hasRawOnlyFilter = !!params.q || (!!params.attributes && Object.keys(params.attributes).length > 0);
 
